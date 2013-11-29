@@ -94,7 +94,7 @@ static struct msm_bus_paths
 static struct msm_bus_scale_pdata mdp_bus_ppp_scale_table = {
 	.usecase = mdp_bus_ppp_usecases,
 	.num_usecases = ARRAY_SIZE(mdp_bus_ppp_usecases),
-	.name = "mdp3",
+	.name = "mdp3_ppp",
 };
 
 struct mdp3_bus_handle_map mdp3_bus_handle[MDP3_BUS_HANDLE_MAX] = {
@@ -161,12 +161,19 @@ static irqreturn_t mdp3_irq_handler(int irq, void *ptr)
 {
 	int i = 0;
 	struct mdp3_hw_resource *mdata = (struct mdp3_hw_resource *)ptr;
-	u32 mdp_interrupt = MDP3_REG_READ(MDP3_REG_INTR_STATUS);
+	u32 mdp_interrupt = 0;
 
+	spin_lock(&mdata->irq_lock);
+	if (!mdata->irq_mask) {
+		pr_err("spurious interrupt\n");
+		spin_unlock(&mdata->irq_lock);
+		return IRQ_HANDLED;
+	}
+
+	mdp_interrupt = MDP3_REG_READ(MDP3_REG_INTR_STATUS);
 	MDP3_REG_WRITE(MDP3_REG_INTR_CLEAR, mdp_interrupt);
 	pr_debug("mdp3_irq_handler irq=%d\n", mdp_interrupt);
 
-	spin_lock(&mdata->irq_lock);
 	mdp_interrupt &= mdata->irq_mask;
 
 	while (mdp_interrupt && i < MDP3_MAX_INTR) {
@@ -183,7 +190,6 @@ static irqreturn_t mdp3_irq_handler(int irq, void *ptr)
 void mdp3_irq_enable(int type)
 {
 	unsigned long flag;
-	int irqEnabled = 0;
 
 	pr_debug("mdp3_irq_enable type=%d\n", type);
 	spin_lock_irqsave(&mdp3_res->irq_lock, flag);
@@ -193,11 +199,10 @@ void mdp3_irq_enable(int type)
 		spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
 		return;
 	}
-	irqEnabled = mdp3_res->irq_mask;
+
 	mdp3_res->irq_mask |= BIT(type);
 	MDP3_REG_WRITE(MDP3_REG_INTR_ENABLE, mdp3_res->irq_mask);
-	if (!irqEnabled)
-		enable_irq(mdp3_res->irq);
+
 	spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
 }
 
@@ -206,18 +211,7 @@ void mdp3_irq_disable(int type)
 	unsigned long flag;
 
 	spin_lock_irqsave(&mdp3_res->irq_lock, flag);
-	if (mdp3_res->irq_ref_count[type] <= 0) {
-		pr_debug("interrupt %d not enabled\n", type);
-		spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
-		return;
-	}
-	mdp3_res->irq_ref_count[type] -= 1;
-	if (mdp3_res->irq_ref_count[type] == 0) {
-		mdp3_res->irq_mask &= ~BIT(type);
-		MDP3_REG_WRITE(MDP3_REG_INTR_ENABLE, mdp3_res->irq_mask);
-		if (!mdp3_res->irq_mask)
-			disable_irq(mdp3_res->irq);
-	}
+	mdp3_irq_disable_nosync(type);
 	spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
 }
 
@@ -231,8 +225,6 @@ void mdp3_irq_disable_nosync(int type)
 	if (mdp3_res->irq_ref_count[type] == 0) {
 		mdp3_res->irq_mask &= ~BIT(type);
 		MDP3_REG_WRITE(MDP3_REG_INTR_ENABLE, mdp3_res->irq_mask);
-		if (!mdp3_res->irq_mask)
-			disable_irq_nosync(mdp3_res->irq);
 	}
 }
 
@@ -240,7 +232,7 @@ int mdp3_set_intr_callback(u32 type, struct mdp3_intr_cb *cb)
 {
 	unsigned long flag;
 
-	pr_debug("interrupt %d callback n", type);
+	pr_debug("interrupt %d callback\n", type);
 	spin_lock_irqsave(&mdp3_res->irq_lock, flag);
 	if (cb)
 		mdp3_res->callbacks[type] = *cb;
@@ -249,6 +241,30 @@ int mdp3_set_intr_callback(u32 type, struct mdp3_intr_cb *cb)
 
 	spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
 	return 0;
+}
+
+void mdp3_irq_register(void)
+{
+	unsigned long flag;
+
+	pr_debug("mdp3_irq_register\n");
+	spin_lock_irqsave(&mdp3_res->irq_lock, flag);
+	enable_irq(mdp3_res->irq);
+	spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
+}
+
+void mdp3_irq_deregister(void)
+{
+	unsigned long flag;
+
+	pr_debug("mdp3_irq_deregister\n");
+	spin_lock_irqsave(&mdp3_res->irq_lock, flag);
+	memset(mdp3_res->irq_ref_count, 0, sizeof(u32) * MDP3_MAX_INTR);
+	mdp3_res->irq_mask = 0;
+	MDP3_REG_WRITE(MDP3_REG_INTR_ENABLE, 0);
+	MDP3_REG_WRITE(MDP3_REG_INTR_CLEAR, 0xfffffff);
+	disable_irq_nosync(mdp3_res->irq);
+	spin_unlock_irqrestore(&mdp3_res->irq_lock, flag);
 }
 
 static int mdp3_bus_scale_register(void)
@@ -393,7 +409,8 @@ static int mdp3_clk_update(u32 clk_idx, u32 enable)
 
 
 
-int mdp3_clk_set_rate(int clk_type, unsigned long clk_rate)
+int mdp3_clk_set_rate(int clk_type, unsigned long clk_rate,
+			int client)
 {
 	int ret = 0;
 	unsigned long rounded_rate;
@@ -406,6 +423,19 @@ int mdp3_clk_set_rate(int clk_type, unsigned long clk_rate)
 			pr_err("unable to round rate err=%ld\n", rounded_rate);
 			mutex_unlock(&mdp3_res->res_mutex);
 			return -EINVAL;
+		}
+		if (clk_type == MDP3_CLK_CORE) {
+			if (client == MDP3_CLIENT_DMA_P) {
+				mdp3_res->dma_core_clk_request = rounded_rate;
+			} else if (client == MDP3_CLIENT_PPP) {
+				mdp3_res->ppp_core_clk_request = rounded_rate;
+			} else {
+				pr_err("unrecognized client=%d\n", client);
+				mutex_unlock(&mdp3_res->res_mutex);
+				return -EINVAL;
+			}
+			rounded_rate = max(mdp3_res->dma_core_clk_request,
+				mdp3_res->ppp_core_clk_request);
 		}
 		if (rounded_rate != clk_get_rate(clk)) {
 			ret = clk_set_rate(clk, rounded_rate);
@@ -536,13 +566,6 @@ static int mdp3_irq_setup(void)
 	return 0;
 }
 
-static int mdp3_iommu_fault_handler(struct iommu_domain *domain,
-		struct device *dev, unsigned long iova, int flags, void *token)
-{
-	pr_err("MDP IOMMU page fault: iova 0x%lx\n", iova);
-	return 0;
-}
-
 int mdp3_iommu_attach(int context)
 {
 	struct mdp3_iommu_ctx_map *context_map;
@@ -618,9 +641,6 @@ int mdp3_iommu_domain_init(void)
 			else
 				return PTR_ERR(mdp3_iommu_domains[i].domain);
 		}
-		iommu_set_fault_handler(mdp3_iommu_domains[i].domain,
-					mdp3_iommu_fault_handler,
-					NULL);
 	}
 
 	mdp3_res->domains = mdp3_iommu_domains;
@@ -759,11 +779,6 @@ static int mdp3_res_init(void)
 	if (rc)
 		return rc;
 
-	rc = mdp3_iommu_attach(MDP3_IOMMU_CTX_DMA_0);
-	if (rc) {
-		pr_err("fail to attach DMA-P context 0\n");
-		return rc;
-	}
 	mdp3_res->bus_handle = mdp3_bus_handle;
 	rc = mdp3_bus_scale_register();
 	if (rc) {
@@ -828,20 +843,16 @@ int mdp3_put_img(struct mdp3_img_data *data)
 	struct ion_client *iclient = mdp3_res->ion_client;
 	int dom = (mdp3_res->domains + MDP3_IOMMU_DOMAIN)->domain_idx;
 
-	if (!data->srcp_file) {
-		pr_debug("No img to put\n");
-		return 0;
-	}
-	if (data->flags & MDP_BLIT_SRC_GEM) {
-		pr_debug("memory source MDP_BLIT_SRC_GEM\n");
-	} else if (data->flags & MDP_MEMORY_ID_TYPE_FB) {
-		pr_debug("fb mem buf=0x%x\n", data->addr);
+	 if (data->flags & MDP_MEMORY_ID_TYPE_FB) {
+		pr_info("mdp3_put_img fb mem buf=0x%x\n", data->addr);
 		fput_light(data->srcp_file, data->p_need);
 		data->srcp_file = NULL;
-	} else {
+	} else if (!IS_ERR_OR_NULL(data->srcp_ihdl)) {
 		ion_unmap_iommu(iclient, data->srcp_ihdl, dom, 0);
 		ion_free(iclient, data->srcp_ihdl);
 		data->srcp_ihdl = NULL;
+	} else {
+		return -EINVAL;
 	}
 	return 0;
 }
@@ -857,16 +868,9 @@ int mdp3_get_img(struct msmfb_data *img, struct mdp3_img_data *data)
 
 	start = (unsigned long *) &data->addr;
 	len = (unsigned long *) &data->len;
-	data->flags |= img->flags;
+	data->flags = img->flags;
 	data->p_need = 0;
 
-	if (img->flags & MDP_BLIT_SRC_GEM) {
-		data->srcp_file = NULL;
-		ret = kgsl_gem_obj_addr(img->memory_id, (int) img->priv,
-					&data->addr, &data->len);
-		if (!ret)
-			goto done;
-	}
 	if (img->flags & MDP_MEMORY_ID_TYPE_FB) {
 		file = fget_light(img->memory_id, &data->p_need);
 		if (file == NULL) {
@@ -891,8 +895,7 @@ int mdp3_get_img(struct msmfb_data *img, struct mdp3_img_data *data)
 		data->srcp_file = file;
 		if (!ret)
 			goto done;
-	}
-	if (iclient) {
+	} else if (iclient) {
 		data->srcp_ihdl = ion_import_dma_buf(iclient, img->memory_id);
 		if (IS_ERR_OR_NULL(data->srcp_ihdl)) {
 			pr_err("error on ion_import_fd\n");
@@ -928,19 +931,31 @@ done:
 	return ret;
 }
 
-int mdp3_ppp_iommu_attach(void)
+int mdp3_iommu_enable(int client)
 {
 	int rc;
-	rc = mdp3_iommu_attach(MDP3_IOMMU_CTX_PPP_0);
-	rc |= mdp3_iommu_attach(MDP3_IOMMU_CTX_PPP_1);
+
+	if (client == MDP3_CLIENT_DMA_P) {
+		rc = mdp3_iommu_attach(MDP3_IOMMU_CTX_DMA_0);
+	} else {
+		rc = mdp3_iommu_attach(MDP3_IOMMU_CTX_PPP_0);
+		rc |= mdp3_iommu_attach(MDP3_IOMMU_CTX_PPP_1);
+	}
+
 	return rc;
 }
 
-int mdp3_ppp_iommu_dettach(void)
+int mdp3_iommu_disable(int client)
 {
 	int rc;
-	rc = mdp3_iommu_dettach(MDP3_IOMMU_CTX_PPP_0);
-	rc = mdp3_iommu_dettach(MDP3_IOMMU_CTX_PPP_1);
+
+	if (client == MDP3_CLIENT_DMA_P) {
+		rc = mdp3_iommu_dettach(MDP3_IOMMU_CTX_DMA_0);
+	} else {
+		rc = mdp3_iommu_dettach(MDP3_IOMMU_CTX_PPP_0);
+		rc |= mdp3_iommu_dettach(MDP3_IOMMU_CTX_PPP_1);
+	}
+
 	return rc;
 }
 
@@ -948,7 +963,7 @@ static int mdp3_init(struct msm_fb_data_type *mfd)
 {
 	int rc;
 	rc = mdp3_ctrl_init(mfd);
-	rc |= mdp3_ppp_res_init();
+	rc |= mdp3_ppp_res_init(mfd);
 	return rc;
 }
 
@@ -965,6 +980,92 @@ u32 mdp3_fb_stride(u32 fb_index, u32 xres, int bpp)
 		return ALIGN(xres, 32) * bpp;
 	else
 		return xres * bpp;
+}
+
+static int mdp3_fbmem_alloc(struct msm_fb_data_type *mfd)
+{
+	int ret = -ENOMEM, dom;
+	void *virt = NULL;
+	unsigned long phys = 0;
+	size_t size;
+	u32 yres = mfd->fbi->var.yres_virtual;
+
+	size = PAGE_ALIGN(mfd->fbi->fix.line_length * yres);
+
+	if (mfd->index != 0) {
+		mfd->fbi->screen_base = virt;
+		mfd->fbi->fix.smem_start = phys;
+		mfd->fbi->fix.smem_len = 0;
+		return 0;
+	}
+
+	mdp3_res->ion_handle = ion_alloc(mdp3_res->ion_client, size,
+					SZ_1M,
+					ION_HEAP(ION_QSECOM_HEAP_ID), 0);
+
+	if (!IS_ERR_OR_NULL(mdp3_res->ion_handle)) {
+		virt = ion_map_kernel(mdp3_res->ion_client,
+					mdp3_res->ion_handle);
+		if (IS_ERR(virt)) {
+			pr_err("%s map kernel error\n", __func__);
+			goto ion_map_kernel_err;
+		}
+
+		ret = ion_phys(mdp3_res->ion_client, mdp3_res->ion_handle,
+				&phys, &size);
+		if (ret) {
+			pr_err("%s ion_phys error\n", __func__);
+			goto ion_map_phys_err;
+		}
+	} else {
+		pr_err("%s ion alloc fail\n", __func__);
+		mdp3_res->ion_handle = NULL;
+		return -ENOMEM;
+	}
+
+	dom = (mdp3_res->domains + MDP3_IOMMU_DOMAIN)->domain_idx;
+
+	ret = ion_map_iommu(mdp3_res->ion_client, mdp3_res->ion_handle,
+			dom, 0, SZ_4K, 0, &mfd->iova,
+			(unsigned long *)&size, 0, 0);
+
+	if (ret) {
+		pr_err("%s map IOMMU error\n", __func__);
+		goto ion_map_phys_err;
+	}
+
+	pr_info("allocating %u bytes at %p (%lx phys) for fb %d\n",
+			size, virt, phys, mfd->index);
+
+	mfd->fbi->screen_base = virt;
+	mfd->fbi->fix.smem_start = phys;
+	mfd->fbi->fix.smem_len = size;
+	return 0;
+
+ion_map_phys_err:
+	ion_unmap_kernel(mdp3_res->ion_client, mdp3_res->ion_handle);
+ion_map_kernel_err:
+	ion_free(mdp3_res->ion_client, mdp3_res->ion_handle);
+	mdp3_res->ion_handle = NULL;
+	return -ENOMEM;
+}
+
+void mdp3_fbmem_free(struct msm_fb_data_type *mfd)
+{
+	pr_info("mdp3_fbmem_free\n");
+	if (mdp3_res->ion_handle) {
+		int dom = (mdp3_res->domains + MDP3_IOMMU_DOMAIN)->domain_idx;
+
+		ion_unmap_kernel(mdp3_res->ion_client, mdp3_res->ion_handle);
+		ion_unmap_iommu(mdp3_res->ion_client,  mdp3_res->ion_handle,
+				dom, 0);
+		ion_free(mdp3_res->ion_client, mdp3_res->ion_handle);
+		mdp3_res->ion_handle = NULL;
+		mfd->fbi->screen_base = 0;
+		mfd->fbi->fix.smem_start = 0;
+		mfd->fbi->fix.smem_len = 0;
+		mfd->iova = 0;
+	}
 }
 
 struct mdp3_dma *mdp3_get_dma_pipe(int capability)
@@ -1008,6 +1109,7 @@ static int mdp3_probe(struct platform_device *pdev)
 	static struct msm_mdp_interface mdp3_interface = {
 	.init_fnc = mdp3_init,
 	.fb_mem_get_iommu_domain = mdp3_fb_mem_get_iommu_domain,
+	.fb_mem_alloc_fnc = mdp3_fbmem_alloc,
 	.fb_stride = mdp3_fb_stride,
 	};
 
