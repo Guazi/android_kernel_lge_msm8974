@@ -12,22 +12,10 @@
 
 #include <linux/io.h>
 #include <linux/types.h>
+#include <linux/slimport.h>
 #include <mach/board.h>
 #include "mdss_hdmi_edid.h"
 
-// enable DEV_DBG log
-#ifdef DEV_DBG
-#undef DEV_DBG
-#define DEV_DBG(fmt, args...)   pr_info(fmt, ##args)
-#endif
-
-/* LGE_CHANGE,
- * add bridge function which can offer edid info from slimport device
- * 2012-12-06, jihyun.seong@lge.com
- */
-#ifdef CONFIG_SLIMPORT_ANX7808
-extern int slimport_read_edid_block(int block, uint8_t *edid_buf);
-#endif
 #define DBC_START_OFFSET 4
 #define HDMI_VSDB_3D_EVF_DATA_OFFSET(vsd) \
 	(!((vsd)[8] & BIT(7)) ? 9 : (!((vsd)[8] & BIT(6)) ? 11 : 13))
@@ -374,37 +362,18 @@ static struct attribute_group hdmi_edid_fs_attrs_group = {
 	.attrs = hdmi_edid_fs_attrs,
 };
 
-static int hdmi_edid_read_block(struct hdmi_edid_ctrl *edid_ctrl, int block,
+static int _hdmi_edid_read_block(struct hdmi_edid_ctrl *edid_ctrl, int block,
 	u8 *edid_buf)
 {
-	const u8 *b = NULL;
-	u32 ndx, check_sum, print_len;
-/* LGE_CHANGE,
- * add bridge function which can offer edid info from slimport device
- * 2012-12-06, jihyun.seong@lge.com
- */
-#ifdef CONFIG_SLIMPORT_ANX7808
-	int status;
-#else /* QCT original */
-	int block_size = 0x80;
-	int i, status;
 	struct hdmi_tx_ddc_data ddc_data;
-#endif
-
-	b = edid_buf;
+	int block_size = 0x80;
+	int i, status = 0;
 
 	if (!edid_ctrl) {
 		DEV_ERR("%s: invalid input\n", __func__);
 		return -EINVAL;
 	}
 
-/* LGE_CHANGE,
- * add bridge function which can offer edid info from slimport device
- * 2012-12-06, jihyun.seong@lge.com
- */
-#ifdef CONFIG_SLIMPORT_ANX7808
-	status = slimport_read_edid_block(block, edid_buf);
-#else /* QCT original */
 	do {
 		DEV_DBG("EDID: reading block(%d) with block-size=%d\n",
 			block, block_size);
@@ -434,7 +403,23 @@ static int hdmi_edid_read_block(struct hdmi_edid_ctrl *edid_ctrl, int block,
 
 		block_size /= 2;
 	} while (status && (block_size >= 16));
-#endif
+
+	return status;
+} /* _hdmi_edid_read_block */
+
+static int hdmi_edid_read_block(struct hdmi_edid_ctrl *edid_ctrl, int block,
+	u8 *edid_buf)
+{
+	const u8 *b = NULL;
+	u32 ndx, check_sum, print_len;
+	int status;
+
+	b = edid_buf;
+
+	/* add bridge function which can offer edid info from slimport device */
+	status = slimport_read_edid_block(block, edid_buf);
+	if (status == -ENOSYS)
+		status = _hdmi_edid_read_block(edid_ctrl, block, edid_buf);
 
 	if (status)
 		goto error;
@@ -857,21 +842,25 @@ static void hdmi_edid_add_sink_3d_format(struct hdmi_edid_sink_data *sink_data,
 		string, added ? "added" : "NOT added");
 } /* hdmi_edid_add_sink_3d_format */
 
-#ifdef CONFIG_SLIMPORT_ANX7808
-extern unchar sp_get_link_bw(void);
-void limit_supported_video_format(u32 *video_format)
+static void hdmi_limit_supported_video_format(u32 *video_format)
 {
-	switch(sp_get_link_bw()){
-	case 0x0a:
-		if((*video_format == HDMI_VFRMT_1920x1080p60_16_9) ||
-			(*video_format == HDMI_VFRMT_2880x480p60_4_3)||
+	switch (sp_get_link_bw()) {
+	case 0x06: /* 1.62 Gbps */
+		DEV_DBG("%s: 1.62G\n", __func__);
+		if (*video_format != HDMI_VFRMT_640x480p60_4_3)
+			*video_format = HDMI_VFRMT_640x480p60_4_3;
+		break;
+	case 0x0a: /* 2.7 Gbps */
+		DEV_DBG("%s: 2.7G\n", __func__);
+		if ((*video_format == HDMI_VFRMT_1920x1080p60_16_9) ||
+			(*video_format == HDMI_VFRMT_2880x480p60_4_3) ||
 			(*video_format == HDMI_VFRMT_2880x480p60_16_9) ||
 			(*video_format == HDMI_VFRMT_1280x720p120_16_9))
 			*video_format = HDMI_VFRMT_1280x720p60_16_9;
-		else if((*video_format == HDMI_VFRMT_1920x1080p50_16_9) ||
-			(*video_format == HDMI_VFRMT_2880x576p50_4_3)||
-			(*video_format == HDMI_VFRMT_2880x576p50_16_9) ||
-			(*video_format == HDMI_VFRMT_1280x720p100_16_9))
+		else if ((*video_format == HDMI_VFRMT_1920x1080p50_16_9) ||
+				 (*video_format == HDMI_VFRMT_2880x576p50_4_3) ||
+				 (*video_format == HDMI_VFRMT_2880x576p50_16_9) ||
+				 (*video_format == HDMI_VFRMT_1280x720p100_16_9))
 			*video_format = HDMI_VFRMT_1280x720p50_16_9;
 		else if (*video_format == HDMI_VFRMT_1920x1080i100_16_9)
 			*video_format = HDMI_VFRMT_1920x1080i50_16_9;
@@ -880,26 +869,21 @@ void limit_supported_video_format(u32 *video_format)
 		else if (*video_format == HDMI_VFRMT_1280x1024p60_5_4)
 			*video_format = HDMI_VFRMT_1024x768p60_4_3;
 		break;
-	case 0x06:
-		if(*video_format != HDMI_VFRMT_640x480p60_4_3)
-			*video_format = HDMI_VFRMT_640x480p60_4_3;
-		break;
-	case 0x14:
+	case 0x14: /* 5.4 Gbps */
+		DEV_DBG("%s: 5.4G\n", __func__);
 	default:
 		break;
 	}
 }
-#endif
+
 static void hdmi_edid_add_sink_video_format(
 	struct hdmi_edid_sink_data *sink_data, u32 video_format)
 {
 	const struct msm_hdmi_mode_timing_info *timing =
 		hdmi_get_supported_mode(video_format);
 	u32 supported = timing != NULL;
-#ifdef CONFIG_SLIMPORT_ANX7808
-	limit_supported_video_format(&video_format);
-#endif
 
+	hdmi_limit_supported_video_format(&video_format);
 	if (video_format >= HDMI_VFRMT_MAX) {
 		DEV_ERR("%s: video format: %s is not supported\n", __func__,
 			msm_hdmi_mode_2string(video_format));
@@ -920,7 +904,8 @@ static void hdmi_edid_add_sink_video_format(
 static void hdmi_edid_get_display_vsd_3d_mode(const u8 *data_buf,
 	struct hdmi_edid_sink_data *sink_data, u32 num_of_cea_blocks)
 {
-	u8 len, offset, present_multi_3d, hdmi_vic_len, hdmi_3d_len;
+	u8 len, offset, present_multi_3d, hdmi_vic_len;
+	int hdmi_3d_len;
 	u16 structure_all, structure_mask;
 	const u8 *vsd = num_of_cea_blocks ?
 		hdmi_edid_find_block(data_buf+0x80, DBC_START_OFFSET,
@@ -1252,14 +1237,14 @@ static void hdmi_edid_get_display_mode(struct hdmi_edid_ctrl *edid_ctrl,
 	while (std_blk < 8) {
 		if ((edid_blk0[0x26 + offset] == 0x81) &&
 		    (edid_blk0[0x26 + offset + 1] == 0x80)) {
-			DEV_DBG("%s: 108MHz: off=[%x] stdblk=[%x]\n",
+			pr_debug("%s: 108MHz: off=[%x] stdblk=[%x]\n",
 				 __func__, offset, std_blk);
 			hdmi_edid_add_sink_video_format(sink_data,
 				HDMI_VFRMT_1280x1024p60_5_4);
 		}
 		if ((edid_blk0[0x26 + offset] == 0x61) &&
 		    (edid_blk0[0x26 + offset + 1] == 0x40)) {
-			DEV_DBG("%s:1: 65MHz: off=[%x] stdblk=[%x]\n",
+			pr_debug("%s: 65MHz: off=[%x] stdblk=[%x]\n",
 				 __func__, offset, std_blk);
 			hdmi_edid_add_sink_video_format(sink_data,
 				HDMI_VFRMT_1024x768p60_4_3);
@@ -1292,7 +1277,7 @@ static void hdmi_edid_get_display_mode(struct hdmi_edid_ctrl *edid_ctrl,
 				iter++;
 				/* Second set of supported formats */
 				if (edid_blk0[iter] & 0x02) {
-					DEV_DBG("%s: DMT 1280x1024@60\n",
+					pr_debug("%s: DMT 1280x1024@60\n",
 						 __func__);
 					hdmi_edid_add_sink_video_format(
 						sink_data,
@@ -1307,7 +1292,7 @@ static void hdmi_edid_get_display_mode(struct hdmi_edid_ctrl *edid_ctrl,
 
 	/* Established Timing I and II */
 	if (edid_blk0[0x24] & BIT(3)) {
-		DEV_DBG("%s:2: 65MHz: off=[%x] stdblk=[%x]\n",
+		pr_debug("%s: 65MHz: off=[%x] stdblk=[%x]\n",
 			 __func__, offset, std_blk);
 		hdmi_edid_add_sink_video_format(sink_data,
 				HDMI_VFRMT_1024x768p60_4_3);
@@ -1557,14 +1542,11 @@ u32 hdmi_edid_get_sink_mode(void *input)
 		DEV_ERR("%s: invalid input\n", __func__);
 		return 0;
 	}
-#ifdef CONFIG_SLIMPORT_ANX7808
+
 	if (is_slimport_dp())
-		return true;
+		return 1;
 	else
 		return edid_ctrl->sink_mode;
-#else
-	return edid_ctrl->sink_mode;
-#endif
 } /* hdmi_edid_get_sink_mode */
 
 int hdmi_edid_get_audio_blk(void *input, struct msm_hdmi_audio_edid_blk *blk)
