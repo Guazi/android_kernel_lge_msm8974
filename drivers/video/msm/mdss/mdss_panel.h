@@ -16,15 +16,14 @@
 
 #include <linux/platform_device.h>
 #include <linux/types.h>
-#ifdef CONFIG_MACH_LGE
-#define QCT_UNDERRUN_PATCH
-#endif
 
 /* panel id type */
 struct panel_id {
 	u16 id;
 	u16 type;
 };
+
+#define DEFAULT_FRAME_RATE	60
 
 /* panel type list */
 #define NO_PANEL		0xffff	/* No Panel */
@@ -106,12 +105,44 @@ enum mdss_intf_events {
 	MDSS_EVENT_CHECK_PARAMS,
 	MDSS_EVENT_CONT_SPLASH_BEGIN,
 	MDSS_EVENT_CONT_SPLASH_FINISH,
-#ifdef CONFIG_OLED_SUPPORT
-	MDSS_EVENT_FIRST_FRAME_UPDATE,
-#endif
 	MDSS_EVENT_FB_REGISTERED,
 	MDSS_EVENT_PANEL_CLK_CTRL,
 	MDSS_EVENT_DSI_CMDLIST_KOFF,
+};
+
+/**
+ * enum mdp_notify_event - Different frame events to indicate frame update state
+ *
+ * @MDP_NOTIFY_FRAME_BEGIN:	Frame update has started, the frame is about to
+ *				be programmed into hardware.
+ * @MDP_NOTIFY_FRAME_READY:	Frame ready to be kicked off, this can be used
+ *				as the last point in time to synchronized with
+ *				source buffers before kickoff.
+ * @MDP_NOTIFY_FRAME_FLUSHED:	Configuration of frame has been flushed and
+ *				DMA transfer has started.
+ * @MDP_NOTIFY_FRAME_DONE:	Frame DMA transfer has completed.
+ *				- For video mode panels this will indicate that
+ *				  previous frame has been replaced by new one.
+ *				- For command mode/writeback frame done happens
+ *				  as soon as the DMA of the frame is done.
+ * @MDP_NOTIFY_FRAME_TIMEOUT:	Frame DMA transfer has failed to complete within
+ *				a fair amount of time.
+ */
+enum mdp_notify_event {
+	MDP_NOTIFY_FRAME_BEGIN = 1,
+	MDP_NOTIFY_FRAME_READY,
+	MDP_NOTIFY_FRAME_FLUSHED,
+	MDP_NOTIFY_FRAME_DONE,
+	MDP_NOTIFY_FRAME_TIMEOUT,
+};
+
+enum {
+	PANEL_QCOM = 0,
+	PANEL_LGE_GK_LGD_VIDEO = 1,
+	PANEL_LGE_JDI_NOVATEK_VIDEO,
+	PANEL_LGE_JDI_NOVATEK_CMD,
+	PANEL_LGE_JDI_ORISE_VIDEO,
+	PANEL_LGE_JDI_ORISE_CMD,
 };
 
 struct lcd_panel_info {
@@ -128,12 +159,6 @@ struct lcd_panel_info {
 	u32 xres_pad;
 	/* Pad height */
 	u32 yres_pad;
-#ifdef CONFIG_OLED_SUPPORT
-	/* Margin width */
-	u32 xres_margin;
-	/* Margin height */
-	u32 yres_margin;
-#endif
 };
 
 
@@ -231,6 +256,8 @@ struct fbc_panel_info {
 struct mdss_panel_info {
 	u32 xres;
 	u32 yres;
+	u32 width;
+	u32 height;
 	u32 bpp;
 	u32 type;
 	u32 wait_cycle;
@@ -249,10 +276,6 @@ struct mdss_panel_info {
 	int pwm_pmic_gpio;
 	int pwm_lpg_chan;
 	int pwm_period;
-#ifdef CONFIG_OLED_SUPPORT
-       int blmap_size;
-       char *blmap;
-#endif
 
 	u32 cont_splash_enabled;
 	struct ion_handle *splash_ihdl;
@@ -286,9 +309,46 @@ struct mdss_panel_data {
 	struct mdss_panel_data *next;
 };
 
-#ifdef QCT_UNDERRUN_PATCH
 /**
- * mdss_panel_get_vtotal - return panel vertical height
+ * mdss_get_panel_framerate() - get panel frame rate based on panel information
+ * @panel_info:	Pointer to panel info containing all panel information
+ */
+static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info)
+{
+	u32 frame_rate, pixel_total;
+
+	if (panel_info == NULL)
+		return DEFAULT_FRAME_RATE;
+
+	switch (panel_info->type) {
+	case MIPI_VIDEO_PANEL:
+	case MIPI_CMD_PANEL:
+		frame_rate = panel_info->mipi.frame_rate;
+		break;
+	case WRITEBACK_PANEL:
+		frame_rate = DEFAULT_FRAME_RATE;
+		break;
+	default:
+		pixel_total = (panel_info->lcdc.h_back_porch +
+			  panel_info->lcdc.h_front_porch +
+			  panel_info->lcdc.h_pulse_width +
+			  panel_info->xres) *
+			 (panel_info->lcdc.v_back_porch +
+			  panel_info->lcdc.v_front_porch +
+			  panel_info->lcdc.v_pulse_width +
+			  panel_info->yres);
+		if (pixel_total)
+			frame_rate = panel_info->clk_rate / pixel_total;
+		else
+			frame_rate = DEFAULT_FRAME_RATE;
+
+		break;
+	}
+	return frame_rate;
+}
+
+/*
+ * mdss_panel_get_vtotal() - return panel vertical height
  * @pinfo:	Pointer to panel info containing all panel information
  *
  * Returns the total height of the panel including any blanking regions
@@ -300,7 +360,7 @@ static inline int mdss_panel_get_vtotal(struct mdss_panel_info *pinfo)
 			pinfo->lcdc.v_front_porch +
 			pinfo->lcdc.v_pulse_width;
 }
-#endif
+
 int mdss_register_panel(struct platform_device *pdev,
 	struct mdss_panel_data *pdata);
 #endif /* MDSS_PANEL_H */
