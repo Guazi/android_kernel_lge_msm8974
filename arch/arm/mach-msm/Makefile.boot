@@ -47,7 +47,16 @@ endif
 
 # MSM8974
    zreladdr-$(CONFIG_ARCH_MSM8974)	:= 0x00008000
-ifeq ($(CONFIG_MACH_LGE),n)
+ifeq ($(CONFIG_MACH_LGE),y)
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-a.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-b.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-bn.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-c.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-f.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-10.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-11.dtb
+        dtb-$(CONFIG_MACH_MSM8974_HAMMERHEAD)	+= msm8974-hammerhead-rev-11j.dtb
+else
         dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v1-cdp.dtb
         dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v1-fluid.dtb
         dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v1-liquid.dtb
@@ -60,29 +69,10 @@ ifeq ($(CONFIG_MACH_LGE),n)
         dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v2-mtp.dtb
         dtb-$(CONFIG_ARCH_MSM8974)	+= apq8074-v2-liquid.dtb
         dtb-$(CONFIG_ARCH_MSM8974)	+= apq8074-v2-dragonboard.dtb
-else
-        dtb-$(CONFIG_ARCH_MSM8974_G2_KR)	+= msm8974-g2-kr.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_KR)	+= msm8974-v2-g2-kr.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_ATT)	+= msm8974-g2-att.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_ATT)	+= msm8974-v2-g2-att.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_VZW)	+= msm8974-g2-vzw.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_VZW)	+= msm8974-v2-g2-vzw.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_SPR)	+= msm8974-g2-spr.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_SPR)	+= msm8974-v2-g2-spr.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_TMO_US)+= msm8974-g2-tmo_us.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_TMO_US)+= msm8974-v2-g2-tmo_us.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_DCM)	+= msm8974-g2-dcm.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_DCM)	+= msm8974-v2-g2-dcm.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_KDDI)	+= msm8974-g2-kddi.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_KDDI)	+= msm8974-v2-g2-kddi.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_OPEN_COM)	+= msm8974-g2-open_com.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_OPEN_COM)	+= msm8974-v2-g2-open_com.dtb
-	dtb-$(CONFIG_ARCH_MSM8974_G2_OPEN_AME)	+= msm8974-g2-open_ame.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_OPEN_AME)	+= msm8974-v2-g2-open_ame.dtb
-	dtb-$(CONFIG_ARCH_MSM8974_G2_OPT_AU)	+= msm8974-g2-opt_au.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_OPT_AU)	+= msm8974-v2-g2-opt_au.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_CA)	+= msm8974-g2-ca.dtb
-        dtb-$(CONFIG_ARCH_MSM8974_G2_CA)	+= msm8974-v2-g2-ca.dtb
+        dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v2.2-cdp.dtb
+        dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v2.2-fluid.dtb
+        dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v2.2-liquid.dtb
+        dtb-$(CONFIG_ARCH_MSM8974)	+= msm8974-v2.2-mtp.dtb
 endif
 
 # APQ8084
@@ -109,9 +99,12 @@ endif
 # MSM8226
    zreladdr-$(CONFIG_ARCH_MSM8226)	:= 0x00008000
         dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-sim.dtb
-        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-cdp.dtb
-        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-mtp.dtb
-        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-qrd.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v1-cdp.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v1-mtp.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v1-qrd.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v2-cdp.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v2-mtp.dtb
+        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v2-qrd.dtb
         dtb-$(CONFIG_ARCH_MSM8226)	+= msm8926-cdp.dtb
         dtb-$(CONFIG_ARCH_MSM8226)	+= msm8926-mtp.dtb
         dtb-$(CONFIG_ARCH_MSM8226)	+= msm8926-qrd.dtb

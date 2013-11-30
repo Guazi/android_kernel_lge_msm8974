@@ -27,13 +27,6 @@
 #include "clock-mdss-8974.h"
 
 #define REG_R(addr)			readl_relaxed(addr)
-#ifdef CONFIG_MACH_LGE
-/* LGE_CHANGE
-* This is for auto pll patch from case#01156220
-* 2013-05-25, baryun.hwang@lge.com
-*/
-#define QCT_AUTO_PLL_PATCH
-#endif
 #define REG_W(data, addr)		writel_relaxed(data, addr)
 #define DSS_REG_W(base, offset, data)	REG_W((data), (base) + (offset))
 #define DSS_REG_R(base, offset)		REG_R((base) + (offset))
@@ -861,6 +854,17 @@ static int analog_get_div(struct div_clk *clk)
 	return div;
 }
 
+static void dsi_pll_toggle_lock_detect(void)
+{
+	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_LKDET_CFG2,
+		0x05);
+	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_LKDET_CFG2,
+		0x04);
+	udelay(1);
+	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_LKDET_CFG2,
+		0x05);
+}
+
 static int dsi_pll_lock_status(void)
 {
 	u32 status;
@@ -882,6 +886,12 @@ static int dsi_pll_lock_status(void)
 	return pll_locked;
 }
 
+static inline int dsi_pll_toggle_lock_detect_and_check_status(void)
+{
+	dsi_pll_toggle_lock_detect();
+	return dsi_pll_lock_status();
+}
+
 static void dsi_pll_software_reset(void)
 {
 	/*
@@ -889,9 +899,9 @@ static void dsi_pll_software_reset(void)
 	 * reset bit off and back on.
 	 */
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_TEST_CFG, 0x01);
-	udelay(1000);
+	udelay(1);
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_TEST_CFG, 0x00);
-	udelay(1000);
+	udelay(1);
 }
 
 static int dsi_pll_enable_seq_m(void)
@@ -959,7 +969,7 @@ static int dsi_pll_enable_seq_d(void)
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x0f);
 	udelay(1);
 
-	pll_locked = dsi_pll_lock_status();
+	pll_locked = dsi_pll_toggle_lock_detect_and_check_status();
 	pr_debug("%s: PLL status = %s\n", __func__,
 		pll_locked ? "Locked" : "Unlocked");
 
@@ -988,7 +998,7 @@ static int dsi_pll_enable_seq_f1(void)
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x0f);
 	udelay(1000);
 
-	pll_locked = dsi_pll_lock_status();
+	pll_locked = dsi_pll_toggle_lock_detect_and_check_status();
 	pr_debug("%s: PLL status = %s\n", __func__,
 		pll_locked ? "Locked" : "Unlocked");
 
@@ -1013,7 +1023,7 @@ static int dsi_pll_enable_seq_c(void)
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x0f);
 	udelay(1000);
 
-	pll_locked = dsi_pll_lock_status();
+	pll_locked = dsi_pll_toggle_lock_detect_and_check_status();
 	pr_debug("%s: PLL status = %s\n", __func__,
 		pll_locked ? "Locked" : "Unlocked");
 
@@ -1039,7 +1049,7 @@ static int dsi_pll_enable_seq_e(void)
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x0f);
 	udelay(1000);
 
-	pll_locked = dsi_pll_lock_status();
+	pll_locked = dsi_pll_toggle_lock_detect_and_check_status();
 	pr_debug("%s: PLL status = %s\n", __func__,
 		pll_locked ? "Locked" : "Unlocked");
 
@@ -1058,22 +1068,22 @@ static int dsi_pll_enable_seq_8974(void)
 	 * Add necessary delays recommeded by hardware.
 	 */
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x01);
-	udelay(1000);
+	udelay(1);
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x05);
-	udelay(1000);
+	udelay(200);
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x07);
-	udelay(1000);
+	udelay(500);
 	DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x0f);
-	udelay(1000);
+	udelay(500);
 
 	for (i = 0; i < 3; i++) {
+		udelay(100);
 		/* DSI Uniphy lock detect setting */
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_LKDET_CFG2,
 			0x04);
 		udelay(100);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_LKDET_CFG2,
 			0x05);
-		udelay(500);
 		/* poll for PLL ready status */
 		max_reads = 5;
 		timeout_us = 100;
@@ -1087,6 +1097,7 @@ static int dsi_pll_enable_seq_8974(void)
 			pr_debug("%s:Trying to power UP PLL again\n",
 			       __func__);
 		} else {
+			pr_debug("PLL lock time: inner loop iteration %d\n", i);
 			break;
 		}
 
@@ -1096,22 +1107,22 @@ static int dsi_pll_enable_seq_8974(void)
 		 * Add necessary delays recommeded by hardware.
 		 */
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x1);
-		udelay(1000);
+		udelay(1);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x5);
-		udelay(1000);
+		udelay(200);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x7);
-		udelay(1000);
+		udelay(250);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x5);
-		udelay(1000);
+		udelay(200);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0x7);
-		udelay(1000);
+		udelay(500);
 		DSS_REG_W(mdss_dsi_base, DSI_0_PHY_PLL_UNIPHY_PLL_GLB_CFG, 0xf);
-		udelay(2000);
+		udelay(500);
 
 	}
 
 	if ((status & 0x01) != 1) {
-		pr_err("%s: DSI PLL status=%x failed to Lock\n",
+		pr_debug("%s: DSI PLL status=%x failed to Lock\n",
 		       __func__, status);
 		rc = -EINVAL;
 		goto error;
@@ -1140,8 +1151,10 @@ static int dsi_pll_enable(struct clk *c)
 		rc = vco->pll_enable_seqs[i]();
 		pr_debug("%s: DSI PLL %s after sequence #%d\n", __func__,
 			rc ? "unlocked" : "locked", i + 1);
-		if (!rc)
+		if (!rc) {
+			pr_debug("PLL lock time: outer loop iteration %d\n", i);
 			break;
+		}
 	}
 	clk_disable(mdss_ahb_clk);
 
@@ -1374,7 +1387,8 @@ static int vco_prepare(struct clk *c)
 {
 	int rc = 0;
 
-	if (vco_cached_rate != 0) {
+	if ((vco_cached_rate != 0)
+	    && (vco_cached_rate == c->rate)) {
 		rc = vco_set_rate(c, vco_cached_rate);
 		if (rc) {
 			pr_err("%s: vco_set_rate failed. rc=%d\n",

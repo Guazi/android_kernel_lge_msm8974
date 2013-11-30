@@ -24,6 +24,7 @@ endif
 
 obj-y += acpuclock.o
 obj-$(CONFIG_HW_PERF_EVENTS) += perf_trace_counters.o
+CFLAGS_perf_trace_counters.o += -Iarch/arm/mach-msm
 obj-$(CONFIG_ARCH_MSM_KRAIT) += acpuclock-krait.o
 ifdef CONFIG_ARCH_MSM_KRAIT
 obj-$(CONFIG_DEBUG_FS) += acpuclock-krait-debug.o
@@ -62,8 +63,8 @@ obj-$(CONFIG_HOTPLUG_CPU) += hotplug.o
 obj-$(CONFIG_MSM_AVS_HW) += avs.o
 obj-$(CONFIG_CPU_V6) += idle-v6.o
 obj-$(CONFIG_CPU_V7) += idle-v7.o
-obj-$(CONFIG_MSM_JTAG) += jtag.o
-obj-$(CONFIG_MSM_JTAG_MM) +=  jtag-mm.o
+obj-$(CONFIG_MSM_JTAG) += jtag-fuse.o jtag.o
+obj-$(CONFIG_MSM_JTAG_MM) +=  jtag-fuse.o jtag-mm.o
 
 msm-etm-objs := etm.o
 obj-$(CONFIG_MSM_ETM) += msm-etm.o
@@ -319,6 +320,7 @@ obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-rfkill.o msm_vibrator.o
 
 CFLAGS_msm_vibrator.o += -Idrivers/staging/android
 CFLAGS_board-9615.o += -Idrivers/usb/gadget
+CFLAGS_clock-mdss-8974.o += -Idrivers/video/msm
 
 obj-$(CONFIG_ARCH_FSM9XXX) += board-fsm9xxx.o
 
@@ -335,6 +337,7 @@ obj-$(CONFIG_MSM_MPM_OF) += mpm-of.o
 obj-$(CONFIG_MSM_MPM) += mpm.o
 obj-$(CONFIG_MSM_RPM_STATS_LOG) += rpm_stats.o rpm_master_stat.o
 obj-$(CONFIG_MSM_RPM_RBCPR_STATS_LOG) += rpm_rbcpr_stats.o
+obj-$(CONFIG_MSM_RPM_RBCPR_STATS_V2_LOG) += rpm_rbcpr_stats_v2.o
 obj-$(CONFIG_MSM_RPM_LOG) += rpm_log.o
 obj-$(CONFIG_MSM_TZ_LOG) += tz_log.o
 obj-$(CONFIG_MSM_XO) += msm_xo.o
@@ -424,10 +427,9 @@ obj-$(CONFIG_MEMORY_HOLE_CARVEOUT) +=  msm_mem_hole.o
 
 obj-$(CONFIG_MSM_SMCMOD) += smcmod.o
 obj-$(CONFIG_MSM_CPU_PWRCTL) +=  msm_cpu_pwrctl.o
-obj-$(CONFIG_LGE_SMD_TEST) += smd_lge_loopback.o
+
 obj-$(CONFIG_ARCH_MSM8974) += msm_mpmctr.o
 obj-$(CONFIG_MSM_CPR_REGULATOR) += cpr-regulator.o
-obj-$(CONFIG_LGE_MOCA_DRV) += lge_moca_drv.o
 obj-$(CONFIG_CPU_FREQ_MSM) += cpufreq.o
 
 obj-$(CONFIG_WALL_CLK) += wallclk.o

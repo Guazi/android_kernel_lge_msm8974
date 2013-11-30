@@ -43,6 +43,7 @@
 			atmel,i2c-pull-up;
 			atmel,no-force-update;
 			atmel,cfg_1 {
+				atmel,fw-name = "atmel_8974_fluid_v1_0_AA.hex";
 				atmel,family-id = <0x82>;
 				atmel,variant-id = <0x19>;
 				atmel,version = <0x10>;
@@ -403,6 +404,11 @@
 };
 
 &pm8941_bms {
+	qcom,enable-fcc-learning;
+	qcom,min-fcc-learning-soc = <20>;
+	qcom,min-fcc-ocv-pc = <30>;
+	qcom,min-fcc-learning-samples = <5>;
+	qcom,fcc-resolution = <10>;
 	status = "ok";
 };
 

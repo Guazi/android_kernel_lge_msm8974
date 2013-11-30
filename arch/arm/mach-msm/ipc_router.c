@@ -95,9 +95,9 @@ if (msm_ipc_router_debug_mask & R2R_RAW_HDR) \
 #define NTFY(x...) do { } while (0)
 #endif
 
-#define IPC_ROUTER_LOG_EVENT_ERROR      0x10
-#define IPC_ROUTER_LOG_EVENT_TX         0x11
-#define IPC_ROUTER_LOG_EVENT_RX         0x12
+#define IPC_ROUTER_LOG_EVENT_ERROR      0x00
+#define IPC_ROUTER_LOG_EVENT_TX         0x01
+#define IPC_ROUTER_LOG_EVENT_RX         0x02
 
 static LIST_HEAD(control_ports);
 static DECLARE_RWSEM(control_ports_lock_lha5);
@@ -466,6 +466,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 			    struct rr_packet *pkt, int clone)
 {
 	struct rr_packet *temp_pkt = pkt;
+	void (*notify)(unsigned event, void *priv);
 
 	if (unlikely(!port_ptr || !pkt))
 		return -EINVAL;
@@ -484,9 +485,10 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	wake_lock(&port_ptr->port_rx_wake_lock);
 	list_add_tail(&temp_pkt->list, &port_ptr->port_rx_q);
 	wake_up(&port_ptr->port_rx_wait_q);
-	if (port_ptr->notify)
-		port_ptr->notify(MSM_IPC_ROUTER_READ_CB, port_ptr->priv);
+	notify = port_ptr->notify;
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhb3);
+	if (notify)
+		notify(MSM_IPC_ROUTER_READ_CB, port_ptr->priv);
 	return 0;
 }
 
@@ -575,19 +577,10 @@ struct msm_ipc_port *msm_ipc_router_create_raw_port(void *endpoint,
 	INIT_LIST_HEAD(&port_ptr->port_rx_q);
 	mutex_init(&port_ptr->port_rx_q_lock_lhb3);
 	init_waitqueue_head(&port_ptr->port_rx_wait_q);
-#ifdef CONFIG_MACH_LGE
-	snprintf(port_ptr->rx_wakelock_name, MAX_WAKELOCK_NAME_SZ,
-		 "[%s] msm_ipc_read%08x:%08x",
-		 current->comm,
-		 port_ptr->this_port.node_id,
-		 port_ptr->this_port.port_id);
-
-#else
 	snprintf(port_ptr->rx_wakelock_name, MAX_WAKELOCK_NAME_SZ,
 		 "ipc%08x_%s",
 		 port_ptr->this_port.port_id,
 		 current->comm);
-#endif
 	wake_lock_init(&port_ptr->port_rx_wake_lock,
 			WAKE_LOCK_SUSPEND, port_ptr->rx_wakelock_name);
 
@@ -744,8 +737,14 @@ static void post_resume_tx(struct msm_ipc_router_remote_port *rport_ptr,
 				&rport_ptr->resume_tx_port_list, list) {
 		local_port =
 			msm_ipc_router_lookup_local_port(rtx_port->port_id);
-		if (local_port)
+		if (local_port && local_port->notify)
+			local_port->notify(MSM_IPC_ROUTER_RESUME_TX,
+						local_port->priv);
+		else if (local_port)
 			post_pkt_to_port(local_port, pkt, 1);
+		else
+			pr_err("%s: Local Port %d not Found",
+				__func__, rtx_port->port_id);
 		list_del(&rtx_port->list);
 		kfree(rtx_port);
 	}
@@ -1801,7 +1800,7 @@ static void do_read_data(struct work_struct *work)
 #if defined(DEBUG)
 		if (msm_ipc_router_debug_mask & SMEM_LOG) {
 			smem_log_event((SMEM_LOG_PROC_ID_APPS |
-				SMEM_LOG_RPC_ROUTER_EVENT_BASE |
+				SMEM_LOG_IPC_ROUTER_EVENT_BASE |
 				IPC_ROUTER_LOG_EVENT_RX),
 				(hdr->src_node_id << 24) |
 				(hdr->src_port_id & 0xffffff),
@@ -2120,7 +2119,7 @@ static int msm_ipc_router_write_pkt(struct msm_ipc_port *src,
 #if defined(DEBUG)
 	if (msm_ipc_router_debug_mask & SMEM_LOG) {
 		smem_log_event((SMEM_LOG_PROC_ID_APPS |
-			SMEM_LOG_RPC_ROUTER_EVENT_BASE |
+			SMEM_LOG_IPC_ROUTER_EVENT_BASE |
 			IPC_ROUTER_LOG_EVENT_TX),
 			(hdr->src_node_id << 24) |
 			(hdr->src_port_id & 0xffffff),
@@ -2225,10 +2224,13 @@ int msm_ipc_router_send_msg(struct msm_ipc_port *src,
 	}
 
 	ret = msm_ipc_router_send_to(src, out_skb_head, dest);
+	if (ret == -EAGAIN)
+		return ret;
 	if (ret < 0) {
 		pr_err("%s: msm_ipc_router_send_to failed - ret: %d\n",
 			__func__, ret);
 		msm_ipc_router_free_skb(out_skb_head);
+		return ret;
 	}
 	return 0;
 }
@@ -2265,6 +2267,29 @@ int msm_ipc_router_read(struct msm_ipc_port *port_ptr,
 	return ret;
 }
 
+/**
+ * msm_ipc_router_recv_from() - Recieve messages destined to a local port.
+ * @port_ptr: Pointer to the local port
+ * @data : Pointer to the socket buffer head
+ * @src: Pointer to local port address
+ * @timeout: < 0 timeout indicates infinite wait till a message arrives.
+ *	     > 0 timeout indicates the wait time.
+ *	     0 indicates that we do not wait.
+ * @return: = Number of bytes read(On successful read operation).
+ *	    = 0 (If there are no pending messages and timeout is 0).
+ *	    = -EINVAL (If either of the arguments, port_ptr or data is invalid)
+ *	    = -EFAULT (If there are no pending messages when timeout is > 0
+ *	      and the wait_event_interruptible_timeout has returned value > 0)
+ *	    = -ERESTARTSYS (If there are no pending messages when timeout
+ *	      is < 0 and wait_event_interruptible was interrupted by a signal)
+ *
+ * This function reads the messages that are destined for a local port. It
+ * is used by modules that exist with-in the kernel and use IPC Router for
+ * transport. The function checks if there are any messages that are already
+ * received. If yes, it reads them, else it waits as per the timeout value.
+ * On a successful read, the return value of the function indicates the number
+ * of bytes that are read.
+ */
 int msm_ipc_router_recv_from(struct msm_ipc_port *port_ptr,
 			     struct sk_buff_head **data,
 			     struct msm_ipc_addr *src,
@@ -2298,7 +2323,7 @@ int msm_ipc_router_recv_from(struct msm_ipc_port *port_ptr,
 				return -EFAULT;
 		}
 		if (timeout == 0)
-			return -ETIMEDOUT;
+			return 0;
 		mutex_lock(&port_ptr->port_rx_q_lock_lhb3);
 	}
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhb3);
@@ -2333,7 +2358,11 @@ int msm_ipc_router_read_msg(struct msm_ipc_port *port_ptr,
 	struct sk_buff_head *in_skb_head;
 	int ret;
 
-	ret = msm_ipc_router_recv_from(port_ptr, &in_skb_head, src, -1);
+	ret = msm_ipc_router_recv_from(port_ptr, &in_skb_head, src, 0);
+
+	if (ret == 0)
+		return -ENOMSG;
+
 	if (ret < 0) {
 		pr_err("%s: msm_ipc_router_recv_from failed - ret: %d\n",
 			__func__, ret);

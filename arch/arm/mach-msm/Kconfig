@@ -404,6 +404,7 @@ config ARCH_MSM9625
 	select GPIO_MSM_V3
 	select MAY_HAVE_SPARSE_IRQ
 	select SPARSE_IRQ
+	select CPU_FREQ_MSM
 	select MSM_MULTIMEDIA_USE_ION
 	select MSM_RPM_STATS_LOG
 	select MSM_QDSP6_APRV2
@@ -1683,6 +1684,15 @@ config MSM_SMD_TTY
 
 	  If in doubt, say yes.
 
+config MSM_SMD_TTY_DS_LEGACY
+	bool "SMD TTY DS Legacy Driver"
+	depends on MSM_SMD_TTY
+	default n
+	help
+	  Provides DS TTY legacy interfaces to interact with the modem.
+
+	  if in doubt, say no.
+
 config MSM_SMD_QMI
 	bool "SMD QMI Driver"
 	depends on MSM_SMD
@@ -2169,12 +2179,12 @@ config MSM_SPM_REGULATOR
 config MSM_SMCMOD
 	tristate "Secure Monitor Call (SMC) Module"
 	default n
-	depends on (ARCH_FSM9XXX && ION && ION_MSM && MSM_SCM)
+	depends on (ION && ION_MSM && MSM_SCM)
 	help
 	  Enable support for smcmod driver. This driver provides a mechanism
 	  to execute the Secure Monitor Call (SMC) to switch from non-secure
-	  to secure execution in the fsm9xxx targets. This module utilizes Ion
-	  for buffer management.
+	  to secure execution in the fsm9xxx and msm8x26 targets. This module
+	  utilizes Ion for buffer management.
 
 config MSM_SUBSYSTEM_RESTART
 	bool "MSM Subsystem Restart"
@@ -2377,6 +2387,15 @@ config MSM_RPM_RBCPR_STATS_LOG
           memory location. These messages provide statistical information about
           RBCPR (Rapid Bridge Core Power Reduction) information . The drivers
           outputs the message via a debugfs node.
+
+config MSM_RPM_RBCPR_STATS_V2_LOG
+        tristate "MSM Resource Power Manager RPBCPR Stat Driver"
+        depends on DEBUG_FS
+          help
+          This option enables v2 of the rpmrbcpr_stats driver which reads RPM
+          memory for statistics pertaining to RPM's RBCPR(Rapid Bridge Core
+          Power Reduction) driver. The drivers outputs the message via a
+          debugfs node.
 
 config MSM_DIRECT_SCLK_ACCESS
 	bool "Direct access to the SCLK timer"
@@ -3010,14 +3029,6 @@ config MSM_BOOT_STATS
 	 display init, total boot time.
 	 This figures are reported in mpm sleep clock cycles and have a
 	 resolution of 31 bits as 1 bit is used as an overflow check.
-
-config LGE_MOCA_DRV
-	tristate "LG Electronics MOCA driver"
-	depends on MACH_LGE
-	default n
-	help
-	  This driver works as a bridge to communicate specific daemon
-	  (like a MOCA process) in User space.
 
 config MSM_XPU_ERR_FATAL
 	bool "Configure XPU violations as fatal errors"
