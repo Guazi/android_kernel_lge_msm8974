@@ -58,9 +58,13 @@ do { \
 static void *smd_tty_log_ctx;
 static DEFINE_MUTEX(smd_tty_lock);
 
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
-static uint lge_ds_modem_wait = 20;
-module_param_named(ds_modem_wait, lge_ds_modem_wait,
+static uint smd_tty_modem_wait;
+module_param_named(modem_wait, smd_tty_modem_wait,
+			uint, S_IRUGO | S_IWUSR | S_IWGRP);
+
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
+static uint smd_tty_ds_modem_wait = 20;
+module_param_named(ds_modem_wait, smd_tty_ds_modem_wait,
 			uint, S_IRUGO | S_IWUSR | S_IWGRP);
 #endif
 
@@ -78,7 +82,7 @@ struct smd_tty_info {
 	int in_reset_updated;
 	int is_open;
 	unsigned int open_wait;
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
 	int is_dsmodem_ready;
 #endif
 	wait_queue_head_t ch_opened_wait_queue;
@@ -113,9 +117,7 @@ static struct smd_config smd_configs[] = {
 	{5, "APPS_RIVA_ANT_CMD", NULL, SMD_APPS_WCNSS},
 	{6, "APPS_RIVA_ANT_DATA", NULL, SMD_APPS_WCNSS},
 	{7, "DATA1", NULL, SMD_APPS_MODEM},
-#ifndef CONFIG_LGE_DDM_TTY
 	{11, "DATA11", NULL, SMD_APPS_MODEM},
-#endif
 	{21, "DATA21", NULL, SMD_APPS_MODEM},
 	{27, "GPSNMEA", NULL, SMD_APPS_MODEM},
 	{36, "LOOPBACK", "LOOPBACK_TTY", SMD_APPS_MODEM},
@@ -186,8 +188,10 @@ static ssize_t open_timeout_show(struct device *dev,
 		if (dev == smd_tty[num_dev].device_ptr)
 			break;
 	}
-	if (num_dev >= MAX_SMD_TTYS)
+	if (num_dev >= MAX_SMD_TTYS) {
 		SMD_TTY_ERR("[%s]: Device Not Found", __func__);
+		return -EINVAL;
+	}
 
 	return snprintf(buf, PAGE_SIZE, "%d\n",
 			smd_tty[num_dev].open_wait);
@@ -314,9 +318,9 @@ static void smd_tty_notify(void *priv, unsigned event)
 					msecs_to_jiffies(1000));
 		tty_kref_put(tty);
 		break;
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
-		/* LGE_CHANGE
-		 * At current qct smd_tty framework, if smd_tty_open()
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
+		/*
+		 * At current smd_tty framework, if smd_tty_open()
 		 * is invoked by process before smd_tty_close() is
 		 * completely finished, smd_tty_open() may fail
 		 * because smd_tty_close() does not wait to close smd
@@ -324,7 +328,6 @@ static void smd_tty_notify(void *priv, unsigned event)
 		 * notify status, SMD_EVENT_REOPEN_READY is used.
 		 * Until smd_tty receive this status, smd_tty_close()
 		 * will be wait(in fact, process will be wait).
-		 * 2011-10-12, hyunhui.park@lge.com
 		 */
 	case SMD_EVENT_REOPEN_READY:
 		/* smd channel is closed completely */
@@ -419,34 +422,37 @@ static int smd_tty_port_activate(struct tty_port *tport,
 					smd_tty[n].smd->port_name, res);
 				goto release_pil;
 			}
-		}
-
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
-		/* LGE_CHANGE
-		 * on boot, process tried to open smd0 sleeps until
-		 * modem is ready or timeout.
-		 */
-		if (n == DS_IDX) {
-			/* wait for open ready status in seconds */
-			pr_info("%s: checking DS modem status\n", __func__);
-			res = wait_event_interruptible_timeout(
-					info->ch_opened_wait_queue,
-					info->is_dsmodem_ready, (lge_ds_modem_wait * HZ));
-			if (res == 0) {
-				res = -ETIMEDOUT;
-				pr_err("%s: timeout to wait for %s modem: %d\n",
-						__func__, smd_tty[n].smd->port_name, res);
-				goto release_pil;
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
+			/*
+			 * on boot, process tried to open smd0 sleeps until
+			 * modem is ready or timeout.
+			 */
+			if (n == DS_IDX) {
+				/* wait for open ready status in seconds */
+				pr_info("%s: checking DS modem status\n", __func__);
+				res = wait_event_interruptible_timeout(
+						info->ch_opened_wait_queue,
+						info->is_dsmodem_ready,
+						(smd_tty_ds_modem_wait * HZ));
+				if (!res) {
+					res = -ETIMEDOUT;
+					pr_err("%s: timeout to wait for %s modem: %d\n",
+							__func__,
+							smd_tty[n].smd->port_name,
+							res);
+					goto release_pil;
+				} else if (res < 0) {
+					pr_err("%s: Error waiting for %s modem: %d\n",
+							__func__,
+							smd_tty[n].smd->port_name,
+							res);
+					goto release_pil;
+				}
+				pr_info("%s: DS modem is OK, open smd0..\n",
+						__func__);
 			}
-			if (res < 0) {
-				pr_err("%s: timeout to wait for %s modem: %d\n",
-						__func__, smd_tty[n].smd->port_name, res);
-				goto release_pil;
-			}
-			pr_info("%s: DS modem is OK, open smd0..\n", __func__);
-		}
 #endif
-
+		}
 	}
 
 	tasklet_init(&info->tty_tsklt, smd_tty_read, (unsigned long)info);
@@ -503,7 +509,7 @@ static void smd_tty_port_shutdown(struct tty_port *tport)
 	struct smd_tty_info *info;
 	struct tty_struct *tty = tty_port_tty_get(tport);
 	unsigned long flags;
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
 	int res = 0;
 	int n = tty->index;
 #endif
@@ -515,6 +521,7 @@ static void smd_tty_port_shutdown(struct tty_port *tport)
 	}
 
 	mutex_lock(&smd_tty_lock);
+
 	spin_lock_irqsave(&info->reset_lock, flags);
 	info->is_open = 0;
 	spin_unlock_irqrestore(&info->reset_lock, flags);
@@ -530,9 +537,9 @@ static void smd_tty_port_shutdown(struct tty_port *tport)
 	del_timer(&info->buf_req_timer);
 
 	smd_close(info->ch);
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
-	/* LGE_CHANGE
-	 * At current qct smd_tty framework, if smd_tty_open()
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
+	/*
+	 * At current smd_tty framework, if smd_tty_open()
 	 * is invoked by process before smd_tty_close() is
 	 * completely finished, smd_tty_open() may fail
 	 * because smd_tty_close() does not wait to close smd
@@ -540,25 +547,18 @@ static void smd_tty_port_shutdown(struct tty_port *tport)
 	 * notify status, SMD_EVENT_REOPEN_READY is used.
 	 * Until smd_tty receive this status, smd_tty_close()
 	 * will be wait(in fact, process will be wait).
-	 * 2011-10-12, hyunhui.park@lge.com
 	 */
 	pr_info("%s: waiting to close smd %s completely\n",
 			__func__, smd_tty[n].smd->port_name);
 	/* wait for reopen ready status in seconds */
 	res = wait_event_interruptible_timeout(
-			info->ch_opened_wait_queue,
-			!info->is_open, (lge_ds_modem_wait * HZ));
-	if (res == 0) {
+		info->ch_opened_wait_queue,
+		!info->is_open, (smd_tty_ds_modem_wait * HZ));
+	if (res <= 0) {
 		/* just in case, remain result value */
-		res = -ETIMEDOUT;
-		pr_err("%s: timeout to wait for %s smd_close.\
-				next smd_open may fail....%d\n",
-				__func__, smd_tty[n].smd->port_name, res);
-	}
-	if (res < 0) {
-		pr_err("%s: wait for %s smd_close failed.\
-				next smd_open may fail....%d\n",
-				__func__, smd_tty[n].smd->port_name, res);
+		pr_err("%s: timeout to wait for %s smd_close. "
+				"next smd_open may fail\n",
+				__func__, smd_tty[n].smd->port_name);
 	}
 #endif
 	info->ch = NULL;
@@ -725,7 +725,21 @@ static int smd_tty_dummy_probe(struct platform_device *pdev)
 	return -ENODEV;
 }
 
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
+/**
+ * smd_tty_log_init()- Init function for IPC logging
+ *
+ * Initialize the buffer that is used to provide the log information
+ * pertaining to the smd_tty module.
+ */
+static void smd_tty_log_init(void)
+{
+	smd_tty_log_ctx = ipc_log_context_create(SMD_TTY_LOG_PAGES,
+						"smd_tty");
+	if (!smd_tty_log_ctx)
+		pr_err("%s: Unable to create IPC log", __func__);
+}
+
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
 static int smd_tty_ds_probe(struct platform_device *pdev)
 {
 	if (!smd_configs[DS_IDX].dev_name) {
@@ -747,20 +761,6 @@ static int smd_tty_ds_probe(struct platform_device *pdev)
 	return 0;
 }
 #endif
-
-/**
- * smd_tty_log_init()- Init function for IPC logging
- *
- * Initialize the buffer that is used to provide the log information
- * pertaining to the smd_tty module.
- */
-static void smd_tty_log_init(void)
-{
-	smd_tty_log_ctx = ipc_log_context_create(SMD_TTY_LOG_PAGES,
-						"smd_tty");
-	if (!smd_tty_log_ctx)
-		pr_err("%s: Unable to create IPC log", __func__);
-}
 
 static struct tty_driver *smd_tty_driver;
 
@@ -807,7 +807,6 @@ static int __init smd_tty_init(void)
 		if (smd_configs[n].dev_name == NULL)
 			smd_configs[n].dev_name = smd_configs[n].port_name;
 
-#ifndef CONFIG_LGE_USES_SMD_DS_TTY
 		if (idx == DS_IDX) {
 			/*
 			 * DS port uses the kernel API starting with
@@ -824,11 +823,13 @@ static int __init smd_tty_init(void)
 			 */
 			legacy_ds |= cpu_is_msm8x60() &&
 					(socinfo_get_platform_subtype() == 0x0);
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
+			legacy_ds |= cpu_is_msm8974();
+#endif
 
 			if (!legacy_ds)
 				continue;
 		}
-#endif
 
 		port = &smd_tty[idx].port;
 		tty_port_init(port);
@@ -844,18 +845,14 @@ static int __init smd_tty_init(void)
 
 		init_completion(&smd_tty[idx].ch_allocated);
 
-#ifdef CONFIG_LGE_USES_SMD_DS_TTY
+		/* register platform device */
+		smd_tty[idx].driver.probe = smd_tty_dummy_probe;
+#ifdef CONFIG_MSM_SMD_TTY_DS_LEGACY
 		if (idx == DS_IDX) {
 			/* register platform device for DS */
 			smd_tty[idx].driver.probe = smd_tty_ds_probe;
 			smd_tty[idx].is_dsmodem_ready = 0;
-		} else {
-			/* register platform device */
-			smd_tty[idx].driver.probe = smd_tty_dummy_probe;
 		}
-#else
-		/* register platform device */
-		smd_tty[idx].driver.probe = smd_tty_dummy_probe;
 #endif
 		smd_tty[idx].driver.driver.name = smd_configs[n].dev_name;
 		smd_tty[idx].driver.driver.owner = THIS_MODULE;
