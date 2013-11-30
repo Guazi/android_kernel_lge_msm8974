@@ -29,8 +29,7 @@
 #define IN_EP_MAX_PACKET_SIZE	256
 
 /* Number of requests to allocate */
-//#define IN_EP_REQ_COUNT 4
-#define IN_EP_REQ_COUNT 16
+#define IN_EP_REQ_COUNT 4
 
 #define AUDIO_AC_INTERFACE	0
 #define AUDIO_AS_INTERFACE	1
@@ -60,8 +59,8 @@ static struct uac1_ac_header_descriptor_2 audio_source_ac_header_desc = {
 	.wTotalLength =		__constant_cpu_to_le16(UAC_DT_TOTAL_LENGTH),
 	.bInCollection =	AUDIO_NUM_INTERFACES,
 	.baInterfaceNr = {
-		[0] =		AUDIO_AC_INTERFACE,
-		[1] =		AUDIO_AS_INTERFACE,
+		[AUDIO_AC_INTERFACE] =	AUDIO_AC_INTERFACE,
+		[AUDIO_AS_INTERFACE] =	AUDIO_AS_INTERFACE,
 	}
 };
 
@@ -600,13 +599,14 @@ audio_bind(struct usb_configuration *c, struct usb_function *f)
 	if (status < 0)
 		goto fail;
 	audio_source_ac_interface_desc.bInterfaceNumber = status;
+	audio_source_ac_header_desc.baInterfaceNr[AUDIO_AC_INTERFACE] = status;
 
 	status = usb_interface_id(c, f);
 	if (status < 0)
 		goto fail;
 	as_interface_alt_0_desc.bInterfaceNumber = status;
 	as_interface_alt_1_desc.bInterfaceNumber = status;
-
+	audio_source_ac_header_desc.baInterfaceNr[AUDIO_AS_INTERFACE] = status;
 	status = -ENODEV;
 
 	/* allocate our endpoint */

@@ -93,7 +93,7 @@ static unsigned char eval_char_literal(const char *s);
 
 /* Enabling traces.  */
 #ifndef YYDEBUG
-# define YYDEBUG 1
+# define YYDEBUG 0
 #endif
 
 /* Enabling verbose error messages.  */
@@ -1864,6 +1864,8 @@ yyreduce:
 
   case 34:
 
+/* Line 1455 of yacc.c  */
+#line 341 "dtc-parser.y"
     {
 			(yyval.integer) = eval_char_literal((yyvsp[(1) - (1)].literal));
 		;}

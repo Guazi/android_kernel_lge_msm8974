@@ -1,7 +1,7 @@
 /*
  * Gadget Driver for Android LAF
  *
- * Copyright (C) 2012 LG Electronics, Inc.
+ * Copyright (C) 2012,2013 LGE Inc. All rights reserved
  * Author: DH, kang <deunghyung.kang@lge.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -31,7 +31,7 @@
 
 #ifdef LAF_DEBUG
 #undef DBG
-#undef ERROR 
+#undef ERROR
 
 #define lafprintk(d, level, fmt, args...) \
 	printk(level "%s: " fmt , (d)->gadget->name , ## args)
@@ -210,11 +210,12 @@ static inline struct laf_dev *func_to_laf(struct usb_function *f)
 
 static struct usb_request *laf_request_new(struct usb_ep *ep, int buffer_size)
 {
-	struct usb_request *req = usb_ep_alloc_request(ep, GFP_KERNEL);
+	struct usb_request *req;
+
+	req = usb_ep_alloc_request(ep, GFP_KERNEL);
 	if (!req)
 		return NULL;
-	
-	pr_info("%s\n", __func__);
+
 	/* now allocate buffers for the requests */
 	req->buf = kmalloc(buffer_size, GFP_KERNEL);
 	if (!req->buf) {
@@ -227,7 +228,6 @@ static struct usb_request *laf_request_new(struct usb_ep *ep, int buffer_size)
 
 static void laf_request_free(struct usb_request *req, struct usb_ep *ep)
 {
-	pr_info("%s\n", __func__);
 	if (req) {
 		kfree(req->buf);
 		usb_ep_free_request(ep, req);
@@ -236,7 +236,6 @@ static void laf_request_free(struct usb_request *req, struct usb_ep *ep)
 
 static inline int laf_lock(atomic_t *excl)
 {
-	pr_info("%s\n", __func__);
 	if (atomic_inc_return(excl) == 1) {
 		return 0;
 	} else {
@@ -247,7 +246,6 @@ static inline int laf_lock(atomic_t *excl)
 
 static inline void laf_unlock(atomic_t *excl)
 {
-	pr_info("%s\n", __func__);
 	if (atomic_dec_return(excl) < 0)
 		atomic_inc(excl);
 }
@@ -257,7 +255,7 @@ void laf_req_put(struct laf_dev *dev, struct list_head *head,
 		struct usb_request *req)
 {
 	unsigned long flags;
-	pr_info("%s\n", __func__);
+
 	spin_lock_irqsave(&dev->lock, flags);
 	list_add_tail(&req->list, head);
 	spin_unlock_irqrestore(&dev->lock, flags);
@@ -268,7 +266,7 @@ struct usb_request *laf_req_get(struct laf_dev *dev, struct list_head *head)
 {
 	unsigned long flags;
 	struct usb_request *req;
-	pr_info("%s\n", __func__);
+
 	spin_lock_irqsave(&dev->lock, flags);
 	if (list_empty(head)) {
 		req = 0;
@@ -283,7 +281,7 @@ struct usb_request *laf_req_get(struct laf_dev *dev, struct list_head *head)
 static void laf_complete_in(struct usb_ep *ep, struct usb_request *req)
 {
 	struct laf_dev *dev = _laf_dev;
-	pr_info("%s\n", __func__);
+
 	if (req->status != 0)
 		atomic_set(&dev->error, 1);
 
@@ -335,10 +333,10 @@ static int laf_create_bulk_endpoints(struct laf_dev *dev,
 
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < LAF_RX_REQ_MAX; i++) {
-	req = laf_request_new(dev->ep_out, LAF_BULK_BUFFER_SIZE);
-	if (!req)
-		goto fail;
-	req->complete = laf_complete_out;
+		req = laf_request_new(dev->ep_out, LAF_BULK_BUFFER_SIZE);
+		if (!req)
+			goto fail;
+		req->complete = laf_complete_out;
 		dev->rx_req[i] = req;
 	}
 
@@ -360,79 +358,80 @@ fail:
 static ssize_t laf_read(struct file *fp, char __user *buf,
 				size_t count, loff_t *pos)
 {
-    struct laf_dev *dev = fp->private_data;
-    struct usb_request *req;
-    int r = count, xfer;
-    int ret;
+	struct laf_dev *dev = fp->private_data;
+	struct usb_request *req;
+	int r = count, xfer;
+	int ret;
 
-    pr_info("%s : laf_read = %d\n", __func__, count);
+	if (unlikely(!_laf_dev))
+		return -ENODEV;
 
-    if (unlikely(!_laf_dev))
-        return -ENODEV;
+	if (unlikely(count > LAF_BULK_BUFFER_SIZE))
+		return -EINVAL;
 
-    if (unlikely(count > LAF_BULK_BUFFER_SIZE))
-        return -EINVAL;
+	if (unlikely(laf_lock(&dev->read_excl)))
+		return -EBUSY;
 
-    if (unlikely(laf_lock(&dev->read_excl)))
-        return -EBUSY;
-
-    /* we will block until we're online */
-    while (unlikely(!(atomic_read(&dev->online)) || unlikely(atomic_read(&dev->error)))) {
-        pr_debug("laf_read: waiting for online state\n");
-        ret = wait_event_interruptible(dev->read_wq,
-                (atomic_read(&dev->online) ||
-                 atomic_read(&dev->error)));
-        if (unlikely(ret < 0)) {
-            laf_unlock(&dev->read_excl);
-            return ret;
-        }
-    }
-    if (unlikely(atomic_read(&dev->error))) {
-        r = -EIO;
-        goto done;
-    }
+	/* we will block until we're online */
+	while (unlikely(!(atomic_read(&dev->online)) ||
+				unlikely(atomic_read(&dev->error)))) {
+		pr_debug("laf_read: waiting for online state\n");
+		ret = wait_event_interruptible(dev->read_wq,
+				(atomic_read(&dev->online) ||
+				 atomic_read(&dev->error)));
+		if (unlikely(ret < 0)) {
+			laf_unlock(&dev->read_excl);
+			return ret;
+		}
+	}
+	if (unlikely(atomic_read(&dev->error))) {
+		r = -EIO;
+		goto done;
+	}
 
 requeue_req:
-    /* queue a request */
-    req = dev->rx_req[0];
-    req->length = count;
-    dev->rx_done = 0;
-    ret = usb_ep_queue(dev->ep_out, req, GFP_ATOMIC);
-    if (unlikely(ret < 0)) {
-        pr_debug("laf_read: failed to queue req %p (%d)\n", req, ret);
-        r = -EIO;
-        atomic_set(&dev->error, 1);
-        goto done;
-    } else {
-        pr_debug("rx %p queue\n", req);
-    }
+	/* queue a request */
+	req = dev->rx_req[0];
+	req->length = count;
+	dev->rx_done = 0;
 
-    /* wait for a request to complete */
-    ret = wait_event_interruptible(dev->read_wq, dev->rx_done);
-    if (unlikely(ret < 0)) {
-        if (ret != -ERESTARTSYS)
-            atomic_set(&dev->error, 1);
-        r = ret;
-        usb_ep_dequeue(dev->ep_out, req);
-        goto done;
-    }
-    if (likely(!atomic_read(&dev->error))) {
-        /* If we got a 0-len packet, throw it back and try again. */
-        if (unlikely(req->actual == 0))
-            goto requeue_req;
+	ret = usb_ep_queue(dev->ep_out, req, GFP_ATOMIC);
+	if (unlikely(ret < 0)) {
+		pr_debug("laf_read: failed to queue req %p (%d)\n", req, ret);
+		r = -EIO;
+		atomic_set(&dev->error, 1);
+		goto done;
+	} else {
+		pr_debug("rx %p queue\n", req);
+	}
 
-        pr_debug("rx %p %d\n", req, req->actual);
-        xfer = (req->actual < count) ? req->actual : count;
-        r = xfer;
-        if (unlikely(copy_to_user(buf, req->buf, xfer)))
-            r = -EFAULT;
-    } else
-        r = -EIO;
+	/* wait for a request to complete */
+	ret = wait_event_interruptible(dev->read_wq, dev->rx_done);
+	if (unlikely(ret < 0)) {
+		if (ret != -ERESTARTSYS)
+			atomic_set(&dev->error, 1);
+		r = ret;
+		usb_ep_dequeue(dev->ep_out, req);
+		goto done;
+	}
+	if (likely(!atomic_read(&dev->error))) {
+		/* If we got a 0-len packet, throw it back and try again. */
+		if (unlikely(req->actual == 0))
+			goto requeue_req;
+
+		pr_debug("rx %p %d\n", req, req->actual);
+		xfer = (req->actual < count) ? req->actual : count;
+		r = xfer;
+		if (unlikely(copy_to_user(buf, req->buf, xfer)))
+			r = -EFAULT;
+	} else {
+		r = -EIO;
+	}
 
 done:
-    laf_unlock(&dev->read_excl);
-    pr_debug("laf_read returning %d\n", r);
-    return r;
+	laf_unlock(&dev->read_excl);
+	pr_debug("laf_read returning %d\n", r);
+	return r;
 }
 
 static ssize_t laf_write(struct file *fp, const char __user *buf,
@@ -443,10 +442,8 @@ static ssize_t laf_write(struct file *fp, const char __user *buf,
 	int r = count, xfer;
 	int ret;
 
-	pr_info("%s\n", __func__);
 	if (!_laf_dev)
 		return -ENODEV;
-	pr_debug("laf_write(%d)\n", count);
 
 	if (laf_lock(&dev->write_excl))
 		return -EBUSY;
@@ -506,7 +503,6 @@ static ssize_t laf_write(struct file *fp, const char __user *buf,
 
 static int laf_open(struct inode *ip, struct file *fp)
 {
-	pr_info("laf_open\n");
 	if (!_laf_dev)
 		return -ENODEV;
 
@@ -544,7 +540,6 @@ static int laf_release(struct inode *ip, struct file *fp)
 		_laf_dev->close_notified = true;
 	}
 
-
 	laf_unlock(&_laf_dev->open_excl);
 	return 0;
 }
@@ -564,11 +559,8 @@ static struct miscdevice laf_device = {
 	.fops = &laf_fops,
 };
 
-
-
-
-static int
-laf_function_bind(struct usb_configuration *c, struct usb_function *f)
+static int laf_function_bind(struct usb_configuration *c,
+		struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
 	struct laf_dev	*dev = func_to_laf(f);
@@ -584,7 +576,7 @@ laf_function_bind(struct usb_configuration *c, struct usb_function *f)
 	if (id < 0)
 		return id;
 	laf_interface_desc.bInterfaceNumber = id;
-	
+
 	DBG(cdev, "laf_function_bind bInterfaceNumber: %d\n", id);
 
 	/* allocate endpoints */
@@ -614,13 +606,12 @@ laf_function_bind(struct usb_configuration *c, struct usb_function *f)
 	return 0;
 }
 
-static void
-laf_function_unbind(struct usb_configuration *c, struct usb_function *f)
+static void laf_function_unbind(struct usb_configuration *c,
+		struct usb_function *f)
 {
 	struct laf_dev	*dev = func_to_laf(f);
 	struct usb_request *req;
 	int i;
-
 
 	atomic_set(&dev->online, 0);
 	atomic_set(&dev->error, 1);
@@ -640,7 +631,6 @@ static int laf_function_set_alt(struct usb_function *f,
 	struct usb_composite_dev *cdev = f->config->cdev;
 	int ret;
 
-	pr_info("%s\n", __func__);
 	DBG(cdev, "laf_function_set_alt intf: %d alt: %d\n", intf, alt);
 
 	ret = config_ep_by_speed(cdev->gadget, f, dev->ep_in);
@@ -683,7 +673,6 @@ static void laf_function_disable(struct usb_function *f)
 {
 	struct laf_dev	*dev = func_to_laf(f);
 
-	pr_info("%s \n", __func__);
 	/*
 	 * Bus reset happened or cable disconnected.  No
 	 * need to disable the configuration now.  We will
@@ -697,15 +686,12 @@ static void laf_function_disable(struct usb_function *f)
 
 	/* readers may be blocked waiting for us to go online */
 	wake_up(&dev->read_wq);
-
 }
 
 static int laf_bind_config(struct usb_configuration *c)
 {
 	struct laf_dev *dev = _laf_dev;
 
-	printk(KERN_INFO "laf_bind_config\n");
-	pr_info("%s\n", __func__);
 	dev->cdev = c->cdev;
 	dev->function.name = "laf";
 	dev->function.descriptors = fs_laf_descs;
@@ -716,8 +702,6 @@ static int laf_bind_config(struct usb_configuration *c)
 	dev->function.unbind = laf_function_unbind;
 	dev->function.set_alt = laf_function_set_alt;
 	dev->function.disable = laf_function_disable;
-	
-//	dev->function.bInterfaceNumber =  usb_interface_id(c, f);
 
 	return usb_add_function(c, &dev->function);
 }
@@ -755,7 +739,7 @@ static int laf_setup(void)
 
 err:
 	kfree(dev);
-	printk(KERN_ERR "laf gadget driver failed to initialize\n");
+	pr_info("laf gadget driver failed to initialize\n");
 	return ret;
 }
 
@@ -766,8 +750,6 @@ static void laf_cleanup(void)
 	kfree(_laf_dev);
 	_laf_dev = NULL;
 }
-
-
 
 #ifndef LAF_DEBUG
 #undef 	pr_info
@@ -781,4 +763,3 @@ static void laf_cleanup(void)
 #define DBG(x...) pr_debug(x)
 
 #endif
-

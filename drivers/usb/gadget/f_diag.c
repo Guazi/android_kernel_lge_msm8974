@@ -26,9 +26,6 @@
 #include <linux/usb/gadget.h>
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
-#ifdef CONFIG_USB_G_LGE_ANDROID_DIAG_OSP_SUPPORT
-#include "../../char/diag/diagchar.h"
-#endif
 
 static DEFINE_SPINLOCK(ch_lock);
 static LIST_HEAD(usb_diag_ch_list);
@@ -246,25 +243,13 @@ static void diag_write_complete(struct usb_ep *ep,
 		ctxt->ch->notify(ctxt->ch->priv, USB_DIAG_WRITE_DONE, d_req);
 }
 
-#ifdef CONFIG_USB_G_LGE_ANDROID_DIAG_OSP_SUPPORT
-#define DIAG_OSP_TYPE 0xf7
-#endif
 static void diag_read_complete(struct usb_ep *ep,
 		struct usb_request *req)
 {
 	struct diag_context *ctxt = ep->driver_data;
 	struct diag_request *d_req = req->context;
 	unsigned long flags;
-#ifdef CONFIG_USB_G_LGE_ANDROID_DIAG_OSP_SUPPORT
-	struct diagchar_dev *driver = ctxt->ch->priv;
 
-	if (((unsigned char *)(d_req->buf))[0] == DIAG_OSP_TYPE) {
-		driver->diag_read_status = 0;
-	}
-	else {
-		driver->diag_read_status = 1;
-	}
-#endif
 	d_req->actual = req->actual;
 	d_req->status = req->status;
 
@@ -458,16 +443,6 @@ int usb_diag_read(struct usb_diag_ch *ch, struct diag_request *d_req)
 	unsigned long flags;
 	struct usb_request *req;
 	static DEFINE_RATELIMIT_STATE(rl, 10*HZ, 1);
-#ifdef CONFIG_USB_G_LGE_ANDROID_DIAG_OSP_SUPPORT
-	struct diagchar_dev *driver = ch->priv;
-
-	if(!driver)
-		return -ENODEV;
-
-	wait_event_interruptible_timeout(driver->diag_read_wait_q,
-			driver->diag_read_status, 1*HZ);
-	ctxt = ch->priv_usb;
-#endif
 
 	if (!ctxt)
 		return -ENODEV;
@@ -651,6 +626,7 @@ static void diag_function_unbind(struct usb_configuration *c,
 		struct usb_function *f)
 {
 	struct diag_context *ctxt = func_to_diag(f);
+	unsigned long flags;
 
 	if (gadget_is_superspeed(c->cdev->gadget))
 		usb_free_descriptors(f->ss_descriptors);
@@ -667,6 +643,10 @@ static void diag_function_unbind(struct usb_configuration *c,
 	if (ctxt->ch && ctxt->ch->priv_usb == ctxt)
 		ctxt->ch->priv_usb = NULL;
 	list_del(&ctxt->list_item);
+	/* Free any pending USB requests from last session */
+	spin_lock_irqsave(&ctxt->lock, flags);
+	free_reqs(ctxt);
+	spin_unlock_irqrestore(&ctxt->lock, flags);
 	kfree(ctxt);
 }
 
@@ -784,7 +764,6 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	spin_lock_init(&dev->lock);
 	INIT_LIST_HEAD(&dev->read_pool);
 	INIT_LIST_HEAD(&dev->write_pool);
-//	INIT_WORK(&dev->config_work, usb_config_work_func);
 
 	ret = usb_add_function(c, &dev->function);
 	if (ret) {
