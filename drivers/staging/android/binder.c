@@ -18,6 +18,7 @@
 #include <asm/cacheflush.h>
 #include <linux/fdtable.h>
 #include <linux/file.h>
+#include <linux/freezer.h>
 #include <linux/fs.h>
 #include <linux/list.h>
 #include <linux/miscdevice.h>
@@ -33,6 +34,7 @@
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
+#include <linux/security.h>
 
 #include "binder.h"
 
@@ -663,9 +665,6 @@ static int binder_update_page_range(struct binder_proc *proc, int allocate,
 				     "for page at %p\n", proc->pid, page_addr);
 			goto err_alloc_page_failed;
 		}
-#ifdef CONFIG_LGE_MEMORY_INFO
-		__inc_zone_page_state(*page, NR_BINDER_PAGES);
-#endif
 		tmp_area.addr = page_addr;
 		tmp_area.size = PAGE_SIZE + PAGE_SIZE /* guard page? */;
 		page_array_ptr = page;
@@ -705,9 +704,6 @@ free_range:
 err_vm_insert_page_failed:
 		unmap_kernel_range((unsigned long)page_addr, PAGE_SIZE);
 err_map_kernel_failed:
-#ifdef CONFIG_LGE_MEMORY_INFO
-		__dec_zone_page_state(*page, NR_BINDER_PAGES);
-#endif
 		__free_page(*page);
 		*page = NULL;
 err_alloc_page_failed:
@@ -1494,6 +1490,10 @@ static void binder_transaction(struct binder_proc *proc,
 			return_error = BR_DEAD_REPLY;
 			goto err_dead_binder;
 		}
+		if (security_binder_transaction(proc->tsk, target_proc->tsk) < 0) {
+			return_error = BR_FAILED_REPLY;
+			goto err_invalid_target_handle;
+		}
 		if (!(tr->flags & TF_ONE_WAY) && thread->transaction_stack) {
 			struct binder_transaction *tmp;
 			tmp = thread->transaction_stack;
@@ -1639,6 +1639,10 @@ static void binder_transaction(struct binder_proc *proc,
 					fp->cookie, node->cookie);
 				goto err_binder_get_ref_for_node_failed;
 			}
+			if (security_binder_transfer_binder(proc->tsk, target_proc->tsk)) {
+				return_error = BR_FAILED_REPLY;
+				goto err_binder_get_ref_for_node_failed;
+			}
 			ref = binder_get_ref_for_node(target_proc, node);
 			if (ref == NULL) {
 				return_error = BR_FAILED_REPLY;
@@ -1665,6 +1669,10 @@ static void binder_transaction(struct binder_proc *proc,
 					"transaction with invalid "
 					"handle, %ld\n", proc->pid,
 					thread->pid, fp->handle);
+				return_error = BR_FAILED_REPLY;
+				goto err_binder_get_ref_failed;
+			}
+			if (security_binder_transfer_binder(proc->tsk, target_proc->tsk)) {
 				return_error = BR_FAILED_REPLY;
 				goto err_binder_get_ref_failed;
 			}
@@ -1720,6 +1728,11 @@ static void binder_transaction(struct binder_proc *proc,
 					proc->pid, thread->pid, fp->handle);
 				return_error = BR_FAILED_REPLY;
 				goto err_fget_failed;
+			}
+			if (security_binder_transfer_file(proc->tsk, target_proc->tsk, file) < 0) {
+				fput(file);
+				return_error = BR_FAILED_REPLY;
+				goto err_get_unused_fd_failed;
 			}
 			target_fd = task_get_unused_fd_flags(target_proc, O_CLOEXEC);
 			if (target_fd < 0) {
@@ -2278,13 +2291,13 @@ retry:
 			if (!binder_has_proc_work(proc, thread))
 				ret = -EAGAIN;
 		} else
-			ret = wait_event_interruptible_exclusive(proc->wait, binder_has_proc_work(proc, thread));
+			ret = wait_event_freezable_exclusive(proc->wait, binder_has_proc_work(proc, thread));
 	} else {
 		if (non_block) {
 			if (!binder_has_thread_work(thread))
 				ret = -EAGAIN;
 		} else
-			ret = wait_event_interruptible(thread->wait, binder_has_thread_work(thread));
+			ret = wait_event_freezable(thread->wait, binder_has_thread_work(thread));
 	}
 	mutex_lock(&binder_lock);
 	if (wait_for_proc_work)
@@ -2754,6 +2767,9 @@ static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			ret = -EBUSY;
 			goto err;
 		}
+		ret = security_binder_set_context_mgr(proc->tsk);
+		if (ret < 0)
+			goto err;
 		if (binder_context_mgr_uid != -1) {
 			if (binder_context_mgr_uid != current->cred->euid) {
 				binder_debug(BINDER_DEBUG_TOP_ERRORS,
@@ -3113,9 +3129,6 @@ static void binder_deferred_release(struct binder_proc *proc)
 					     page_addr);
 				unmap_kernel_range((unsigned long)page_addr,
 					PAGE_SIZE);
-#ifdef CONFIG_LGE_MEMORY_INFO
-				__dec_zone_page_state(proc->pages[i], NR_BINDER_PAGES);
-#endif
 				__free_page(proc->pages[i]);
 				page_count++;
 			}
