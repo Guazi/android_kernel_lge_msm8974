@@ -1107,9 +1107,15 @@ static const struct i2c_device_id mt9m114_i2c_id[] = {
 	{ }
 };
 
+static int32_t msm_mt9m114_i2c_probe(struct i2c_client *client,
+	const struct i2c_device_id *id)
+{
+	return msm_sensor_i2c_probe(client, id, &mt9m114_s_ctrl);
+}
+
 static struct i2c_driver mt9m114_i2c_driver = {
 	.id_table = mt9m114_i2c_id,
-	.probe  = msm_sensor_i2c_probe,
+	.probe  = msm_mt9m114_i2c_probe,
 	.driver = {
 		.name = MT9M114_SENSOR_NAME,
 	},
@@ -1305,6 +1311,15 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 	case CFG_WRITE_I2C_ARRAY: {
 		struct msm_camera_i2c_reg_setting conf_array;
 		struct msm_camera_i2c_reg_array *reg_setting = NULL;
+
+		if (cdata->setting_size !=
+			sizeof(struct msm_camera_i2c_reg_setting)) {
+			pr_err("%s:%d: size %d exp %d\n", __func__, __LINE__,
+				cdata->setting_size,
+				sizeof(struct msm_camera_i2c_reg_setting));
+			rc = -EINVAL;
+			break;
+		}
 
 		if (copy_from_user(&conf_array,
 			(void *)cdata->cfg.setting,

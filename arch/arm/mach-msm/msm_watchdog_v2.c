@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,13 +27,8 @@
 #include <linux/platform_device.h>
 #include <mach/scm.h>
 #include <mach/msm_memory_dump.h>
-
 #ifdef CONFIG_LGE_HANDLE_PANIC
 #include <mach/lge_handle_panic.h>
-#endif
-
-#ifdef CONFIG_MACH_LGE
-#include <mach/board_lge.h>
 #endif
 
 #define MODULE_NAME "msm_watchdog"
@@ -48,6 +43,8 @@
 #define MASK_SIZE		32
 #define SCM_SET_REGSAVE_CMD	0x2
 #define SCM_SVC_SEC_WDOG_DIS	0x7
+
+static struct workqueue_struct *wdog_wq;
 
 struct msm_watchdog_data {
 	unsigned int __iomem phys_base;
@@ -235,7 +232,7 @@ static ssize_t wdog_disable_set(struct device *dev,
 		work_data.wdog_dd = wdog_dd;
 		init_completion(&work_data.complete);
 		INIT_WORK_ONSTACK(&work_data.work, wdog_disable_work);
-		schedule_work_on(0, &work_data.work);
+		queue_work_on(0, wdog_wq, &work_data.work);
 		wait_for_completion(&work_data.complete);
 		mutex_unlock(&wdog_dd->disable_lock);
 	} else {
@@ -310,11 +307,8 @@ static void pet_watchdog_work(struct work_struct *work)
 	/* Check again before scheduling *
 	 * Could have been changed on other cpu */
 	if (enable)
-		schedule_delayed_work_on(0, &wdog_dd->dogwork_struct,
-							delay_time);
-#ifdef CONFIG_MACH_LGE
-	xo_therm_logging();
-#endif
+		queue_delayed_work_on(0, wdog_wq,
+				&wdog_dd->dogwork_struct, delay_time);
 }
 
 static int msm_watchdog_remove(struct platform_device *pdev)
@@ -328,7 +322,7 @@ static int msm_watchdog_remove(struct platform_device *pdev)
 		work_data.wdog_dd = wdog_dd;
 		init_completion(&work_data.complete);
 		INIT_WORK_ONSTACK(&work_data.work, wdog_disable_work);
-		schedule_work_on(0, &work_data.work);
+		queue_work_on(0, wdog_wq, &work_data.work);
 		wait_for_completion(&work_data.complete);
 	}
 	mutex_unlock(&wdog_dd->disable_lock);
@@ -336,6 +330,7 @@ static int msm_watchdog_remove(struct platform_device *pdev)
 	if (wdog_dd->irq_ppi)
 		free_percpu(wdog_dd->wdog_cpu_dd);
 	printk(KERN_INFO "MSM Watchdog Exit - Deactivated\n");
+	destroy_workqueue(wdog_wq);
 	kfree(wdog_dd);
 	return 0;
 }
@@ -365,6 +360,11 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	mb();
 	/* Delay to make sure bite occurs */
 	mdelay(1);
+	pr_err("Wdog - STS: 0x%x, CTL: 0x%x, BARK TIME: 0x%x, BITE TIME: 0x%x",
+		__raw_readl(wdog_dd->base + WDT0_STS),
+		__raw_readl(wdog_dd->base + WDT0_EN),
+		__raw_readl(wdog_dd->base + WDT0_BARK_TIME),
+		__raw_readl(wdog_dd->base + WDT0_BITE_TIME));
 	panic("Failed to cause a watchdog bite! - Falling back to kernel panic!");
 	return IRQ_HANDLED;
 }
@@ -460,7 +460,8 @@ static void init_watchdog_work(struct work_struct *work)
 	atomic_notifier_chain_register(&panic_notifier_list,
 				       &wdog_dd->panic_blk);
 	mutex_init(&wdog_dd->disable_lock);
-	schedule_delayed_work_on(0, &wdog_dd->dogwork_struct, delay_time);
+	queue_delayed_work_on(0, wdog_wq, &wdog_dd->dogwork_struct,
+			delay_time);
 	__raw_writel(1, wdog_dd->base + WDT0_EN);
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
 	wdog_dd->last_pet = sched_clock();
@@ -546,6 +547,12 @@ static int __devinit msm_watchdog_probe(struct platform_device *pdev)
 	int ret;
 	struct msm_watchdog_data *wdog_dd;
 
+	wdog_wq = alloc_workqueue("wdog", WQ_HIGHPRI, 0);
+	if (!wdog_wq) {
+		pr_err("Failed to allocate watchdog workqueue\n");
+		return -EIO;
+	}
+
 	if (!pdev->dev.of_node || !enable)
 		return -ENODEV;
 	wdog_dd = kzalloc(sizeof(struct msm_watchdog_data), GFP_KERNEL);
@@ -559,9 +566,10 @@ static int __devinit msm_watchdog_probe(struct platform_device *pdev)
 	cpumask_clear(&wdog_dd->alive_mask);
 	INIT_WORK(&wdog_dd->init_dogwork_struct, init_watchdog_work);
 	INIT_DELAYED_WORK(&wdog_dd->dogwork_struct, pet_watchdog_work);
-	schedule_work_on(0, &wdog_dd->init_dogwork_struct);
+	queue_work_on(0, wdog_wq, &wdog_dd->init_dogwork_struct);
 	return 0;
 err:
+	destroy_workqueue(wdog_wq);
 	kzfree(wdog_dd);
 	return ret;
 }
