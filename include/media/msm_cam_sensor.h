@@ -78,17 +78,12 @@ enum msm_sensor_clk_type_t {
 enum msm_sensor_power_seq_gpio_t {
 	SENSOR_GPIO_RESET,
 	SENSOR_GPIO_STANDBY,
-/* LGE_CHANGE_S
- * Camera bring-up : Add gpio to control LDO
- * 2013-02-05, jinw.kim@lge.com
- */
 	SENSOR_GPIO_VANA,
 	SENSOR_GPIO_VDIG,
 	SENSOR_GPIO_VIO,
 	SENSOR_GPIO_VCM,
 	SENSOR_GPIO_OIS_LDO_EN,
 	SENSOR_GPIO_OIS_RESET,
-/* LGE_CHANGE_E,  Camera bring-up : Add gpio to control LDO*/
 	SENSOR_GPIO_MAX,
 };
 
@@ -172,6 +167,7 @@ struct msm_camera_sensor_slave_info {
 struct msm_camera_i2c_reg_array {
 	uint16_t reg_addr;
 	uint16_t reg_data;
+	uint32_t delay;
 };
 
 struct msm_camera_i2c_reg_setting {
@@ -216,6 +212,7 @@ struct msm_camera_csid_vc_cfg {
 struct msm_camera_csid_lut_params {
 	uint8_t num_cid;
 	struct msm_camera_csid_vc_cfg *vc_cfg[MAX_CID];
+	uint32_t vc_cfg_size;
 };
 
 struct msm_camera_csid_params {
@@ -257,8 +254,7 @@ struct msm_sensor_info_t {
 	int32_t     subdev_id[SUB_MODULE_MAX];
 };
 
-/* LGE_CHANGE_S, OIS interface, 2013-05-29, kh.kang@lge.com */
-struct msm_sensor_ois_info_t{
+struct msm_sensor_ois_info_t {
 	char ois_provider[MAX_SENSOR_NAME];
 	int16_t gyro[2];
 	int16_t target[2];
@@ -280,7 +276,6 @@ enum ois_ver_t {
 	OIS_VER_DEBUG
 };
 
-/* LGE_CHANGE_E, OIS interface, 2013-05-29, kh.kang@lge.com */
 struct camera_vreg_t {
 	const char *reg_name;
 	enum camera_vreg_type type;
@@ -307,7 +302,7 @@ struct msm_sensor_init_params {
 	enum camb_position_t position;
 	/* sensor mount angle */
 	uint32_t            sensor_mount_angle;
-	int					ois_supported; /* LGE_CHANGE, OIS validity, 2013-06-26, kh.kang@lge.com */
+	int                 ois_supported;
 };
 
 struct sensorb_cfg_data {
@@ -315,16 +310,22 @@ struct sensorb_cfg_data {
 	union {
 		struct msm_sensor_info_t      sensor_info;
 		struct msm_sensor_init_params sensor_init_params;
-		struct msm_sensor_ois_info_t	ois_info;	/* LGE_CHANGE, OIS stats, 2013-04-09, sungmin.woo@lge.com */
+		struct msm_sensor_ois_info_t  ois_info;
 		void                         *setting;
 	} cfg;
+	uint32_t setting_size;
+};
+
+struct msm_sensor_csid_cfg_params {
+	struct msm_camera_csid_params *csid_params;
+	uint32_t                       csid_params_size;
 };
 
 struct csid_cfg_data {
 	enum csid_cfg_type_t cfgtype;
 	union {
 		uint32_t csid_version;
-		struct msm_camera_csid_params *csid_params;
+		struct msm_sensor_csid_cfg_params csid_cfg_params;
 	} cfg;
 };
 
@@ -334,6 +335,7 @@ struct csiphy_cfg_data {
 		struct msm_camera_csiphy_params *csiphy_params;
 		struct msm_camera_csi_lane_params *csi_lane_params;
 	} cfg;
+	uint32_t cfg_params_size;
 };
 
 enum eeprom_cfg_type_t {
@@ -382,11 +384,11 @@ enum msm_sensor_cfg_type_t {
 	CFG_SET_RESOLUTION,
 	CFG_SET_STOP_STREAM,
 	CFG_SET_START_STREAM,
-	CFG_OIS_ON,					/* LGE_CHANGE, OIS, 2013-03-11, sungmin.woo@lge.com */
-	CFG_OIS_OFF,				/* LGE_CHANGE, OIS, 2013-03-11, sungmin.woo@lge.com */
-	CFG_GET_OIS_INFO,			/* LGE_CHANGE, OIS stats, 2013-04-09, sungmin.woo@lge.com */
-	CFG_SET_OIS_MODE,   		/* LGE_CHANGE, OIS interface, 2013-05-29, kh.kang@lge.com */
-	CFG_OIS_MOVE_LENS			/* LGE_CHANGE, OIS interface, 2013-06-20, kh.kang@lge.com */
+	CFG_OIS_ON,
+	CFG_OIS_OFF,
+	CFG_GET_OIS_INFO,
+	CFG_SET_OIS_MODE,
+	CFG_OIS_MOVE_LENS
 };
 
 enum msm_actuator_cfg_type_t {
@@ -435,6 +437,7 @@ struct msm_actuator_move_params_t {
 	int8_t sign_dir;
 	int16_t dest_step_pos;
 	int32_t num_steps;
+	int32_t num_steps_inf_pos;
 	struct damping_params_t *ringing_params;
 };
 
@@ -520,7 +523,6 @@ enum msm_camera_led_config_t {
 	MSM_CAMERA_LED_HIGH,
 	MSM_CAMERA_LED_INIT,
 	MSM_CAMERA_LED_RELEASE,
-	MSM_CAMERA_LED_LOW_MIN_CURRENT,/* LGE_CHANGE, To set lowest flash current for DCM, 2013-07-08, jinw.kim@lge.com */
 };
 
 struct msm_camera_led_cfg_t {
@@ -537,10 +539,10 @@ struct msm_camera_led_cfg_t {
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 3, uint32_t)
 
 #define VIDIOC_MSM_CSIPHY_IO_CFG \
-	_IOWR('V', BASE_VIDIOC_PRIVATE + 4, struct csid_cfg_data)
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 4, struct csiphy_cfg_data)
 
 #define VIDIOC_MSM_CSID_IO_CFG \
-	_IOWR('V', BASE_VIDIOC_PRIVATE + 5, struct csiphy_cfg_data)
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 5, struct csid_cfg_data)
 
 #define VIDIOC_MSM_ACTUATOR_CFG \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 6, struct msm_actuator_cfg_data)
