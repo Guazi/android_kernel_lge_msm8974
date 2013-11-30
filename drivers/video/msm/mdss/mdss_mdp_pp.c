@@ -267,6 +267,7 @@ static void pp_update_igc_lut(struct mdp_igc_lut_data *cfg,
 				u32 offset, u32 blk_idx);
 static void pp_update_gc_one_lut(u32 offset,
 				struct mdp_ar_gc_lut_data *lut_data,
+				uint8_t num_stages);
 static void pp_update_argc_lut(u32 offset,
 				struct mdp_pgc_lut_data *config);
 static void pp_update_hist_lut(char __iomem *base,
@@ -703,7 +704,7 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 			if (src_h <= pipe->dst.h)
 				scale_config |= /* RGB, A */
 					(MDSS_MDP_SCALE_FILTER_BIL << 10) |
-					(MDSS_MDP_SCALE_FILTER_NEAREST << 18);
+					(MDSS_MDP_SCALE_FILTER_BIL << 18);
 			else
 				scale_config |= /* RGB, A */
 					(MDSS_MDP_SCALE_FILTER_PCMN << 10) |
@@ -1014,6 +1015,10 @@ static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer)
 		if (ret < 0)
 			pr_warn("ad_setup(dspp%d) returns %d", dspp_num, ret);
 	}
+	/* call calibration specific processing here */
+	if (ctl->mfd->calib_mode)
+		goto flush_exit;
+
 	/* nothing to update */
 	if ((!flags) && (!(opmode)) && (ret <= 0))
 		goto dspp_exit;
@@ -1286,16 +1291,6 @@ int mdss_mdp_pp_init(struct device *dev)
 			spin_lock_init(&vig[i].pp_res.hist.hist_lock);
 		}
 	}
-#if defined(CONFIG_LCD_KCAL)
-/* LGE_CHANGE_S
-* change code for LCD KCAL
-* 2013-05-08, seojin.lee@lge.com
-*/
-	if (!ret) {
-		mdss_mdp_pp_argc();
-		update_preset_lcdc_lut();
-	}
-#endif
 	mutex_unlock(&mdss_pp_mutex);
 	return ret;
 }
@@ -2572,6 +2567,12 @@ int mdss_mdp_hist_collect(struct mdss_mdp_ctl *ctl,
 			ret = pp_hist_collect(ctl, hist, hist_info, ctl_base);
 			if (ret)
 				goto hist_collect_exit;
+		}
+		if (hist->bin_cnt != HIST_V_SIZE) {
+			pr_err("User not expecting size %d output",
+							HIST_V_SIZE);
+			ret = -EINVAL;
+			goto hist_collect_exit;
 		}
 		if (hist_cnt > 1) {
 			hist_concat = kmalloc(HIST_V_SIZE * sizeof(u32),

@@ -86,7 +86,7 @@ static struct msm_camera_i2c_reg_conf imx135_recommend_settings[] = {
 	{0x4341, 0x58},
 	{0x4342, 0x03},
 	{0x4343, 0x52},
-	/*MoirÈ reduction Parameter Setting	*/
+	/*Moiré reduction Parameter Setting	*/
 	{0x4364, 0x0B},
 	{0x4368, 0x00},
 	{0x4369, 0x0F},

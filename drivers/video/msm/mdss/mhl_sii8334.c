@@ -373,7 +373,7 @@ static int mhl_sii_wait_for_rgnd(struct mhl_tx_ctrl *mhl_ctrl)
 
 /*  USB_HANDSHAKING FUNCTIONS */
 static int mhl_sii_device_discovery(void *data, int id,
-			     void (*usb_notify_cb)(int online))
+			     void (*usb_notify_cb)(void *, int), void *ctx)
 {
 	int rc;
 	struct mhl_tx_ctrl *mhl_ctrl = data;
@@ -398,8 +398,10 @@ static int mhl_sii_device_discovery(void *data, int id,
 		return -EINVAL;
 	}
 
-	if (!mhl_ctrl->notify_usb_online)
+	if (!mhl_ctrl->notify_usb_online) {
 		mhl_ctrl->notify_usb_online = usb_notify_cb;
+		mhl_ctrl->notify_ctx = ctx;
+	}
 
 	if (!mhl_ctrl->disc_enabled) {
 		spin_lock_irqsave(&mhl_ctrl->lock, flags);
@@ -904,7 +906,7 @@ static int mhl_msm_read_rgnd_int(struct mhl_tx_ctrl *mhl_ctrl)
 		mhl_ctrl->mhl_mode = 1;
 		power_supply_changed(&mhl_ctrl->mhl_psy);
 		if (mhl_ctrl->notify_usb_online)
-			mhl_ctrl->notify_usb_online(1);
+			mhl_ctrl->notify_usb_online(mhl_ctrl->notify_ctx, 1);
 	} else {
 		pr_debug("%s: non-mhl sink\n", __func__);
 		mhl_ctrl->mhl_mode = 0;
@@ -1004,7 +1006,7 @@ static int dev_detect_isr(struct mhl_tx_ctrl *mhl_ctrl)
 		mhl_msm_disconnection(mhl_ctrl);
 		power_supply_changed(&mhl_ctrl->mhl_psy);
 		if (mhl_ctrl->notify_usb_online)
-			mhl_ctrl->notify_usb_online(0);
+			mhl_ctrl->notify_usb_online(mhl_ctrl->notify_ctx, 0);
 		return 0;
 	}
 
@@ -1019,7 +1021,7 @@ static int dev_detect_isr(struct mhl_tx_ctrl *mhl_ctrl)
 		mhl_msm_disconnection(mhl_ctrl);
 		power_supply_changed(&mhl_ctrl->mhl_psy);
 		if (mhl_ctrl->notify_usb_online)
-			mhl_ctrl->notify_usb_online(0);
+			mhl_ctrl->notify_usb_online(mhl_ctrl->notify_ctx, 0);
 		return 0;
 	}
 
@@ -1933,6 +1935,72 @@ static struct i2c_device_id mhl_sii_i2c_id[] = {
 
 MODULE_DEVICE_TABLE(i2c, mhl_sii_i2c_id);
 
+#if defined(CONFIG_PM) || defined(CONFIG_PM_SLEEP)
+static int mhl_i2c_suspend_sub(struct i2c_client *client)
+{
+	enable_irq_wake(client->irq);
+	disable_irq(client->irq);
+	return 0;
+}
+
+static int mhl_i2c_resume_sub(struct i2c_client *client)
+{
+	disable_irq_wake(client->irq);
+	enable_irq(client->irq);
+	return 0;
+}
+#endif /* defined(CONFIG_PM) || defined(CONFIG_PM_SLEEP) */
+
+#if defined(CONFIG_PM) && !defined(CONFIG_PM_SLEEP)
+static int mhl_i2c_suspend(struct i2c_client *client, pm_message_t state)
+{
+	if (!client)
+		return -ENODEV;
+	pr_debug("%s: mhl suspend\n", __func__);
+	return mhl_i2c_suspend_sub(client);
+}
+
+static int mhl_i2c_resume(struct i2c_client *client)
+{
+	if (!client)
+		return -ENODEV;
+	pr_debug("%s: mhl resume\n", __func__);
+	return mhl_i2c_resume_sub(client);
+}
+#else
+#define mhl_i2c_suspend NULL
+#define mhl_i2c_resume NULL
+#endif /* defined(CONFIG_PM) && !defined(CONFIG_PM_SLEEP) */
+
+#ifdef CONFIG_PM_SLEEP
+static int mhl_i2c_pm_suspend(struct device *dev)
+{
+	struct i2c_client *client =
+		container_of(dev, struct i2c_client, dev);
+
+	if (!client)
+		return -ENODEV;
+	pr_debug("%s: mhl pm suspend\n", __func__);
+	return mhl_i2c_suspend_sub(client);
+
+}
+
+static int mhl_i2c_pm_resume(struct device *dev)
+{
+	struct i2c_client *client =
+		container_of(dev, struct i2c_client, dev);
+
+	if (!client)
+		return -ENODEV;
+	pr_debug("%s: mhl pm resume\n", __func__);
+	return mhl_i2c_resume_sub(client);
+}
+
+static const struct dev_pm_ops mhl_i2c_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(mhl_i2c_pm_suspend, mhl_i2c_pm_resume)
+};
+#endif /* CONFIG_PM_SLEEP */
+
 static struct of_device_id mhl_match_table[] = {
 	{.compatible = COMPATIBLE_NAME,},
 	{ },
@@ -1943,9 +2011,16 @@ static struct i2c_driver mhl_sii_i2c_driver = {
 		.name = MHL_DRIVER_NAME,
 		.owner = THIS_MODULE,
 		.of_match_table = mhl_match_table,
+#ifdef CONFIG_PM_SLEEP
+		.pm = &mhl_i2c_pm_ops,
+#endif /* CONFIG_PM_SLEEP */
 	},
 	.probe = mhl_i2c_probe,
 	.remove =  mhl_i2c_remove,
+#if defined(CONFIG_PM) && !defined(CONFIG_PM_SLEEP)
+	.suspend = mhl_i2c_suspend,
+	.resume = mhl_i2c_resume,
+#endif /* defined(CONFIG_PM) && !defined(CONFIG_PM_SLEEP) */
 	.id_table = mhl_sii_i2c_id,
 };
 
