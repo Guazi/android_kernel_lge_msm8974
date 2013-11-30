@@ -59,17 +59,7 @@
 
 #include "debug.h"
 
-#if defined(CONFIG_MACH_MSM8974_G2_SPR)\
-	|| defined(CONFIG_MACH_MSM8974_G2_DCM)\
-	|| defined(CONFIG_MACH_MSM8974_G2_KDDI)\
-	|| defined(CONFIG_MACH_MSM8974_G2_OPEN_AME)\
-	|| defined(CONFIG_MACH_MSM8974_G2_OPEN_COM)\
-	|| defined(CONFIG_MACH_MSM8974_G2_TEL_AU)\
-	|| defined(CONFIG_MACH_MSM8974_VU3_KR)
-static char *maximum_speed = "high";
-#else
 static char *maximum_speed = "super";
-#endif
 module_param(maximum_speed, charp, 0);
 MODULE_PARM_DESC(maximum_speed, "Maximum supported speed.");
 
@@ -437,6 +427,14 @@ static int dwc3_core_init(struct dwc3 *dwc)
 		reg &= ~DWC3_GUSB3PIPECTL_DIS_RXDET_U3_RXDET;
 		dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
 	}
+	/*
+	 * clear Elastic buffer mode in GUSBPIPE_CTRL(0) register, otherwise
+	 * it results in high link errors and could cause SS mode transfer
+	 * failure.
+	 */
+	reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
+	reg &= ~DWC3_GUSB3PIPECTL_ELASTIC_BUF_MODE;
+	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
 
 	if (!dwc->ev_buffs) {
 		ret = dwc3_alloc_event_buffers(dwc, DWC3_EVENT_BUFFERS_SIZE);
@@ -566,6 +564,8 @@ static int __devinit dwc3_probe(struct platform_device *pdev)
 
 	dwc->needs_fifo_resize = of_property_read_bool(node, "tx-fifo-resize");
 	host_only_mode = of_property_read_bool(node, "host-only-mode");
+	dwc->no_set_vbus_power = of_property_read_bool(node,
+						"no-set-vbus-power");
 
 	pm_runtime_no_callbacks(dev);
 	pm_runtime_set_active(dev);
