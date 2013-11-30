@@ -55,7 +55,7 @@ static void msm_ispif_io_dump_reg(struct ispif_device *ispif)
 static inline int msm_ispif_is_intf_valid(uint32_t csid_version,
 	uint8_t intf_type)
 {
-	return (csid_version <= CSID_VERSION_V2 && intf_type != VFE0) ?
+	return (csid_version <= CSID_VERSION_V22 && intf_type != VFE0) ?
 		false : true;
 }
 
@@ -67,7 +67,7 @@ static int msm_ispif_clk_ahb_enable(struct ispif_device *ispif, int enable)
 {
 	int rc = 0;
 
-	if (ispif->csid_version < CSID_VERSION_V3) {
+	if (ispif->csid_version < CSID_VERSION_V30) {
 		/* Older ISPIF versiond don't need ahb clokc */
 		return 0;
 	}
@@ -381,6 +381,12 @@ static int msm_ispif_config(struct ispif_device *ispif,
 		rc = -EPERM;
 		return rc;
 	}
+	if (params->num > MAX_PARAM_ENTRIES) {
+		pr_err("%s: invalid param entries %d\n", __func__,
+			params->num);
+		rc = -EINVAL;
+		return rc;
+	}
 
 	for (i = 0; i < params->num; i++) {
 		vfe_intf = params->entries[i].vfe_intf;
@@ -407,14 +413,14 @@ static int msm_ispif_config(struct ispif_device *ispif,
 
 		if ((intftype >= INTF_MAX) ||
 			(vfe_intf >=  ispif->vfe_info.num_vfe) ||
-			(ispif->csid_version <= CSID_VERSION_V2 &&
+			(ispif->csid_version <= CSID_VERSION_V22 &&
 			(vfe_intf > VFE0))) {
 			pr_err("%s: VFEID %d and CSID version %d mismatch\n",
 				__func__, vfe_intf, ispif->csid_version);
 			return -EINVAL;
 		}
 
-		if (ispif->csid_version >= CSID_VERSION_V3)
+		if (ispif->csid_version >= CSID_VERSION_V30)
 				msm_ispif_select_clk_mux(ispif, intftype,
 				params->entries[i].csid, vfe_intf);
 
@@ -481,6 +487,11 @@ static void msm_ispif_intf_cmd(struct ispif_device *ispif, uint32_t cmd_bits,
 			pr_err("%s: invalid interface type\n", __func__);
 			return;
 		}
+		if (params->entries[i].num_cids > MAX_CID_CH) {
+			pr_err("%s: out of range of cid_num %d\n",
+				__func__, params->entries[i].num_cids);
+			return;
+		}
 	}
 
 	for (i = 0; i < params->num; i++) {
@@ -488,13 +499,7 @@ static void msm_ispif_intf_cmd(struct ispif_device *ispif, uint32_t cmd_bits,
 		vfe_intf = params->entries[i].vfe_intf;
 		for (k = 0; k < params->entries[i].num_cids; k++) {
 			cid = params->entries[i].cids[k];
-/* LGE_CHANGE_S, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[Start] */
-#ifdef CONFIG_USE_DUAL_ISP
 			vc = cid / 4;
-#else
-			vc = cid % 4;
-#endif
-/* LGE_CHANGE_E, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[End] */
 			if (intf_type == RDI2) {
 				/* zero out two bits */
 				ispif->applied_intf_cmd[vfe_intf].intf_cmd1 &=
@@ -542,6 +547,12 @@ static int msm_ispif_stop_immediately(struct ispif_device *ispif,
 		return rc;
 	}
 
+	if (params->num > MAX_PARAM_ENTRIES) {
+		pr_err("%s: invalid param entries %d\n", __func__,
+			params->num);
+		rc = -EINVAL;
+		return rc;
+	}
 	msm_ispif_intf_cmd(ispif, ISPIF_INTF_CMD_DISABLE_IMMEDIATELY, params);
 
 	/* after stop the interface we need to unmask the CID enable bits */
@@ -566,6 +577,12 @@ static int msm_ispif_start_frame_boundary(struct ispif_device *ispif,
 		rc = -EPERM;
 		return rc;
 	}
+	if (params->num > MAX_PARAM_ENTRIES) {
+		pr_err("%s: invalid param entries %d\n", __func__,
+			params->num);
+		rc = -EINVAL;
+		return rc;
+	}
 
 	msm_ispif_intf_cmd(ispif, ISPIF_INTF_CMD_ENABLE_FRAME_BOUNDARY, params);
 
@@ -588,6 +605,13 @@ static int msm_ispif_stop_frame_boundary(struct ispif_device *ispif,
 		pr_err("%s: ispif invalid state %d\n", __func__,
 			ispif->ispif_state);
 		rc = -EPERM;
+		return rc;
+	}
+
+	if (params->num > MAX_PARAM_ENTRIES) {
+		pr_err("%s: invalid param entries %d\n", __func__,
+			params->num);
+		rc = -EINVAL;
 		return rc;
 	}
 
@@ -654,8 +678,6 @@ static void ispif_process_irq(struct ispif_device *ispif,
 	if (out[vfe_id].ispifIrqStatus0 &
 			ISPIF_IRQ_STATUS_PIX_SOF_MASK) {
 		ispif->sof_count[vfe_id].sof_cnt[PIX0]++;
-		if(ispif->sof_count[vfe_id].sof_cnt[PIX0] <10)
-			pr_err(" %s : %d ",__func__,ispif->sof_count[vfe_id].sof_cnt[PIX0]);
 	}
 	if (out[vfe_id].ispifIrqStatus0 &
 			ISPIF_IRQ_STATUS_RDI0_SOF_MASK) {
@@ -768,11 +790,6 @@ static int msm_ispif_init(struct ispif_device *ispif,
 
 	BUG_ON(!ispif);
 
-/* LGE_CHANGE_S [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
-	wake_unlock(&ispif->camera_wake_lock);
-	pr_err(" %s:%d camera_wake_lock unlock \n",__func__,__LINE__);
-/* LGE_CHANGE_E [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
-
 	if (ispif->ispif_state == ISPIF_POWER_UP) {
 		pr_err("%s: ispif already initted state = %d\n", __func__,
 			ispif->ispif_state);
@@ -789,7 +806,7 @@ static int msm_ispif_init(struct ispif_device *ispif,
 
 	ispif->csid_version = csid_version;
 
-	if (ispif->csid_version >= CSID_VERSION_V3) {
+	if (ispif->csid_version >= CSID_VERSION_V30) {
 		if (!ispif->clk_mux_mem || !ispif->clk_mux_io) {
 			pr_err("%s csi clk mux mem %p io %p\n", __func__,
 				ispif->clk_mux_mem, ispif->clk_mux_io);
@@ -828,7 +845,7 @@ static int msm_ispif_init(struct ispif_device *ispif,
 	rc = msm_ispif_reset(ispif);
 	if (rc == 0) {
 		ispif->ispif_state = ISPIF_POWER_UP;
-		pr_err("%s: power up done\n", __func__);
+		CDBG("%s: power up done\n", __func__);
 		goto end;
 	}
 
@@ -849,7 +866,7 @@ static void msm_ispif_release(struct ispif_device *ispif)
 		pr_err("%s: ispif invalid state %d\n", __func__,
 			ispif->ispif_state);
 		return;
-	}	
+	}
 
 	/* make sure no streaming going on */
 	msm_ispif_reset(ispif);
@@ -863,12 +880,6 @@ static void msm_ispif_release(struct ispif_device *ispif)
 	iounmap(ispif->clk_mux_base);
 
 	ispif->ispif_state = ISPIF_POWER_DOWN;
-	pr_err(" %s:%d ISPIF_POWER_DOWN %d \n",__func__,__LINE__,ispif->ispif_state);
-
-/* LGE_CHANGE_S [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
-	wake_lock_timeout(&ispif->camera_wake_lock, 1*HZ);
-	pr_err(" %s:%d Before suspend, camera release need time to work complete. \n",__func__,__LINE__);
-/* LGE_CHANGE_E [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
 }
 
 static long msm_ispif_cmd(struct v4l2_subdev *sd, void *arg)
@@ -997,7 +1008,7 @@ static int __devinit ispif_probe(struct platform_device *pdev)
 	if (!ispif) {
 		pr_err("%s: no enough memory\n", __func__);
 		return -ENOMEM;
-	}	
+	}
 
 	v4l2_subdev_init(&ispif->msm_sd.sd, &msm_ispif_subdev_ops);
 	ispif->msm_sd.sd.internal_ops = &msm_ispif_internal_ops;
@@ -1060,12 +1071,7 @@ static int __devinit ispif_probe(struct platform_device *pdev)
 	ispif->pdev = pdev;
 	ispif->ispif_state = ISPIF_POWER_DOWN;
 	ispif->open_cnt = 0;
-	pr_err(" %s:%d ISPIF_POWER_DOWN %d \n",__func__,__LINE__,ispif->ispif_state);
 
-/* LGE_CHANGE_S [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
-	wake_lock_init(&ispif->camera_wake_lock, WAKE_LOCK_SUSPEND, "camera_wake_lock");
-/* LGE_CHANGE_E [20130622][youngbae.choi@lge.com] : To enter the deep sleep after finish camera close */
-	
 	return 0;
 
 error:
@@ -1097,7 +1103,7 @@ static int __init msm_ispif_init_module(void)
 }
 
 static void __exit msm_ispif_exit_module(void)
-{	
+{
 	platform_driver_unregister(&ispif_driver);
 }
 

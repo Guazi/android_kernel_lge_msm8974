@@ -12,11 +12,7 @@
 
 #include <linux/module.h>
 #include <mach/iommu.h>
-/* LGE_CHANGE_S, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[Start] */
-#ifdef CONFIG_USE_DUAL_ISP
 #include <linux/ratelimit.h>
-#endif
-/* LGE_CHANGE_E, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[End] */
 
 #include "msm_isp40.h"
 #include "msm_isp_util.h"
@@ -36,12 +32,14 @@
 
 #define VFE40_8974V1_VERSION 0x10000018
 #define VFE40_8974V2_VERSION 0x1001001A
+#define VFE40_8974V3_VERSION 0x1001001B
 #define VFE40_8x26_VERSION 0x20000013
+#define VFE40_8x26V2_VERSION 0x20010014
 
 #define VFE40_BURST_LEN 3
 #define VFE40_STATS_BURST_LEN 2
 #define VFE40_UB_SIZE 1536
-#define VFE40_EQUAL_SLICE_UB 286
+#define VFE40_EQUAL_SLICE_UB 190
 #define VFE40_WM_BASE(idx) (0x6C + 0x24 * idx)
 #define VFE40_RDI_BASE(idx) (0x2E8 + 0x4 * idx)
 #define VFE40_XBAR_BASE(idx) (0x58 + 0x4 * (idx / 2))
@@ -96,8 +94,10 @@ static struct msm_cam_clk_info msm_vfe40_clk_info[] = {
 static void msm_vfe40_init_qos_parms(struct vfe_device *vfe_dev)
 {
 	void __iomem *vfebase = vfe_dev->vfe_base;
+
 	if (vfe_dev->vfe_hw_version == VFE40_8974V1_VERSION ||
-		vfe_dev->vfe_hw_version == VFE40_8x26_VERSION) {
+		vfe_dev->vfe_hw_version == VFE40_8x26_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8x26V2_VERSION) {
 		msm_camera_io_w(0xAAAAAAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_0);
 		msm_camera_io_w(0xAAAAAAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_1);
 		msm_camera_io_w(0xAAAAAAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_2);
@@ -106,7 +106,8 @@ static void msm_vfe40_init_qos_parms(struct vfe_device *vfe_dev)
 		msm_camera_io_w(0xAAAAAAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_5);
 		msm_camera_io_w(0xAAAAAAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_6);
 		msm_camera_io_w(0x0002AAAA, vfebase + VFE40_BUS_BDG_QOS_CFG_7);
-	} else if (vfe_dev->vfe_hw_version == VFE40_8974V2_VERSION) {
+	} else if (vfe_dev->vfe_hw_version == VFE40_8974V2_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8974V3_VERSION) {
 		msm_camera_io_w(0xAAA9AAA9, vfebase + VFE40_BUS_BDG_QOS_CFG_0);
 		msm_camera_io_w(0xAAA9AAA9, vfebase + VFE40_BUS_BDG_QOS_CFG_1);
 		msm_camera_io_w(0xAAA9AAA9, vfebase + VFE40_BUS_BDG_QOS_CFG_2);
@@ -235,9 +236,11 @@ static void msm_vfe40_init_vbif_parms(struct vfe_device *vfe_dev)
 		msm_vfe40_init_vbif_parms_8974_v1(vfe_dev);
 		break;
 	case VFE40_8974V2_VERSION:
+	case VFE40_8974V3_VERSION:
 		msm_vfe40_init_vbif_parms_8974_v2(vfe_dev);
 		break;
 	case VFE40_8x26_VERSION:
+	case VFE40_8x26V2_VERSION:
 		msm_vfe40_init_vbif_parms_8x26(vfe_dev);
 		break;
 	default:
@@ -348,6 +351,13 @@ static void msm_vfe40_process_halt_irq(struct vfe_device *vfe_dev,
 {
 	if (irq_status1 & (1 << 8))
 		complete(&vfe_dev->halt_complete);
+}
+
+static void msm_vfe40_process_eof_irq(struct vfe_device *vfe_dev,
+	uint32_t irq_status0, uint32_t irq_status1)
+{
+	if (irq_status0 & BIT(1))
+		msm_isp_eof_notify(vfe_dev);
 }
 
 static void msm_vfe40_process_camif_irq(struct vfe_device *vfe_dev,
@@ -501,25 +511,15 @@ static void msm_vfe40_read_irq_status(struct vfe_device *vfe_dev,
 	*irq_status0 = msm_camera_io_r(vfe_dev->vfe_base + 0x38);
 	*irq_status1 = msm_camera_io_r(vfe_dev->vfe_base + 0x3C);
 	/*Ignore composite 3 irq which is used for dual VFE only*/
-/* LGE_CHANGE_S, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[Start] */
-#ifdef CONFIG_USE_DUAL_ISP
 	if (*irq_status0 & 0x6000000)
 		*irq_status0 &= ~(0x10000000);
-#else
-	*irq_status0 &= ~BIT(28);
-#endif
-/* LGE_CHANGE_E, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[End] */
 	msm_camera_io_w(*irq_status0, vfe_dev->vfe_base + 0x30);
 	msm_camera_io_w(*irq_status1, vfe_dev->vfe_base + 0x34);
 	msm_camera_io_w_mb(1, vfe_dev->vfe_base + 0x24);
-/* LGE_CHANGE_S, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[Start] */
-#ifdef CONFIG_USE_DUAL_ISP
 	if (*irq_status0 & 0x10000000) {
 		pr_err_ratelimited("%s: Protection triggered\n", __func__);
 		*irq_status0 &= ~(0x10000000);
 	}
-#endif
-/* LGE_CHANGE_E, add the dual isp patch code from QCT, 2013.6.20, youngil.yun[End] */
 
 	if (*irq_status1 & (1 << 0))
 		vfe_dev->error_info.camif_status =
@@ -602,14 +602,7 @@ static void msm_vfe40_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
 	comp_mask &= ~(0x7F << (comp_mask_index * 8));
 	comp_mask |= (axi_data->composite_info[comp_mask_index].
 		stream_composite_mask << (comp_mask_index * 8));
-/* QMC_PATCH_S, Fix preview split issue on 720p, 2013-07-05, jinw.kim@lge.com */
-#if 0  //QMC Original
 	if (stream_info->plane_cfg[0].plane_addr_offset)
-#else
-	if (stream_info->plane_cfg[0].plane_addr_offset &&
-			stream_info->stream_type == CONTINUOUS_STREAM)
-#endif
-/* QMC_PATCH_E, Fix preview split issue on 720p, 2013-07-05, jinw.kim@lge.com */
 		comp_mask |= (axi_data->composite_info[comp_mask_index].
 		stream_composite_mask << 24);
 	msm_camera_io_w(comp_mask, vfe_dev->vfe_base + 0x40);
@@ -846,6 +839,7 @@ static void msm_vfe40_axi_cfg_wm_reg(
 	uint32_t wm_base = VFE40_WM_BASE(stream_info->wm[plane_idx]);
 
 	if (!stream_info->frame_based) {
+		msm_camera_io_w(0x0, vfe_dev->vfe_base + wm_base);
 		/*WR_IMAGE_SIZE*/
 		val =
 			((msm_isp_cal_word_per_line(
@@ -1309,7 +1303,7 @@ static void msm_vfe40_get_error_mask(
 }
 
 static struct msm_vfe_axi_hardware_info msm_vfe40_axi_hw_info = {
-	.num_wm = 4,
+	.num_wm = 6,
 	.num_comp_mask = 3,
 	.num_rdi = 3,
 	.num_rdi_master = 3,
@@ -1351,6 +1345,7 @@ struct msm_vfe_hardware_info vfe40_hw_info = {
 			.process_camif_irq = msm_vfe40_process_camif_irq,
 			.process_reset_irq = msm_vfe40_process_reset_irq,
 			.process_halt_irq = msm_vfe40_process_halt_irq,
+			.process_eof_irq = msm_vfe40_process_eof_irq,
 			.process_reset_irq = msm_vfe40_process_reset_irq,
 			.process_reg_update = msm_vfe40_process_reg_update,
 			.process_axi_irq = msm_isp_process_axi_irq,

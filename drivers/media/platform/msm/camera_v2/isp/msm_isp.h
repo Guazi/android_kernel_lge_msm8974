@@ -73,6 +73,8 @@ struct msm_vfe_irq_ops {
 		uint32_t irq_status0, uint32_t irq_status1);
 	void (*process_halt_irq) (struct vfe_device *vfe_dev,
 		uint32_t irq_status0, uint32_t irq_status1);
+	void (*process_eof_irq) (struct vfe_device *vfe_dev,
+		uint32_t irq_status0, uint32_t irq_status1);
 	void (*process_camif_irq) (struct vfe_device *vfe_dev,
 		uint32_t irq_status0, uint32_t irq_status1,
 		struct msm_isp_timestamp *ts);
@@ -240,7 +242,10 @@ struct msm_vfe_axi_stream {
 	uint32_t session_id;
 	uint32_t stream_id;
 	uint32_t bufq_handle;
+	uint32_t bufq_scratch_handle;
 	uint32_t stream_handle;
+	uint32_t request_frm_num;
+	uint32_t request_frame;
 	uint8_t buf_divert;
 	enum msm_vfe_axi_stream_type stream_type;
 
@@ -286,6 +291,11 @@ enum msm_wm_ub_cfg_type {
 	MSM_WM_UB_CFG_MAX_NUM
 };
 
+struct msm_vfe_axi_process_done_data {
+	struct msm_isp_buffer *done_buf_arr;
+	int32_t data_for_send;
+};
+
 struct msm_vfe_axi_shared_data {
 	struct msm_vfe_axi_hardware_info *hw_info;
 	struct msm_vfe_axi_stream stream_info[MAX_NUM_STREAM];
@@ -301,7 +311,9 @@ struct msm_vfe_axi_shared_data {
 	enum msm_isp_camif_update_state pipeline_update;
 	struct msm_vfe_src_info src_info[VFE_SRC_MAX];
 	uint16_t stream_handle_cnt;
+	uint16_t created_streams_num;
 	unsigned long event_mask;
+	struct msm_vfe_axi_process_done_data proc_done_data[MAX_NUM_STREAM];
 };
 
 struct msm_vfe_stats_hardware_info {
@@ -400,6 +412,11 @@ struct vfe_device {
 	struct msm_vfe_tasklet_queue_cmd
 		tasklet_queue_cmd[MSM_VFE_TASKLETQ_SIZE];
 
+	uint8_t config_done_flag;
+	uint8_t skip_ping_pong_cfg;
+	uint8_t skip_isp_send_event;
+	spinlock_t  cfg_flag_lock;
+
 	uint32_t vfe_hw_version;
 	struct msm_vfe_hardware_info *hw_info;
 	struct msm_vfe_axi_shared_data axi_data;
@@ -407,6 +424,7 @@ struct vfe_device {
 	struct msm_vfe_error_info error_info;
 	struct msm_isp_buf_mgr *buf_mgr;
 	int dump_reg;
+	int vfe_clk_idx;
 	uint32_t vfe_open_cnt;
 };
 

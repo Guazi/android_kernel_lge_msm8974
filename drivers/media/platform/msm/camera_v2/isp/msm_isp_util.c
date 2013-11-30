@@ -389,6 +389,11 @@ long msm_isp_ioctl(struct v4l2_subdev *sd,
 		rc = msm_isp_update_axi_stream(vfe_dev, arg);
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
+	case VIDIOC_MSM_ISP_CONFIG_DONE:
+		mutex_lock(&vfe_dev->core_mutex);
+		rc = msm_isp_config_done(vfe_dev, arg);
+		mutex_unlock(&vfe_dev->core_mutex);
+		break;
 	case MSM_SD_SHUTDOWN:
 		while (vfe_dev->vfe_open_cnt != 0)
 			msm_isp_close_node(sd, NULL);
@@ -542,6 +547,19 @@ int msm_isp_proc_cmd(struct vfe_device *vfe_dev, void *arg)
 	struct msm_vfe_cfg_cmd2 *proc_cmd = arg;
 	struct msm_vfe_reg_cfg_cmd *reg_cfg_cmd;
 	uint32_t *cfg_data;
+
+	if (proc_cmd->num_cfg > ISP_REG_CFG_NUM_CFG_MAX) {
+		pr_err("%s: Unsupported number of commands %d!\n",
+				__func__, proc_cmd->num_cfg);
+		rc = -EINVAL;
+		goto reg_cfg_failed;
+	}
+	if (proc_cmd->cmd_len > ISP_REG_CFG_CMD_LEN_MAX) {
+		pr_err("%s: Unsupported command length %d!\n",
+				__func__, proc_cmd->cmd_len);
+		rc = -EINVAL;
+		goto reg_cfg_failed;
+	}
 
 	reg_cfg_cmd = kzalloc(sizeof(struct msm_vfe_reg_cfg_cmd)*
 		proc_cmd->num_cfg, GFP_KERNEL);
@@ -834,6 +852,8 @@ void msm_isp_do_tasklet(unsigned long data)
 			irq_status0, irq_status1);
 		irq_ops->process_halt_irq(vfe_dev,
 			irq_status0, irq_status1);
+		irq_ops->process_eof_irq(vfe_dev,
+			irq_status0, irq_status1);
 		irq_ops->process_camif_irq(vfe_dev,
 			irq_status0, irq_status1, &ts);
 		irq_ops->process_axi_irq(vfe_dev,
@@ -851,6 +871,17 @@ void msm_isp_set_src_state(struct vfe_device *vfe_dev, void *arg)
 	struct msm_vfe_axi_src_state *src_state = arg;
 	vfe_dev->axi_data.src_info[src_state->input_src].active =
 	src_state->src_active;
+}
+
+int msm_isp_config_done(struct vfe_device *vfe_dev, void *arg)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&vfe_dev->cfg_flag_lock, flags);
+	vfe_dev->config_done_flag = 1;
+	spin_unlock_irqrestore(&vfe_dev->cfg_flag_lock, flags);
+
+	return 0;
 }
 
 int msm_isp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
@@ -877,10 +908,12 @@ int msm_isp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 
 	rc = vfe_dev->hw_info->vfe_ops.core_ops.reset_hw(vfe_dev);
 	if (rc <= 0) {
-		pr_err("%s: reset timeout\n", __func__);
+		pr_err("%s: reset timeout, rc = %ld\n", __func__, rc);
 		mutex_unlock(&vfe_dev->core_mutex);
 		mutex_unlock(&vfe_dev->realtime_mutex);
-		return -EINVAL;
+                if (rc != -ERESTARTSYS)
+			rc = -EINVAL;
+		return rc;
 	}
 	vfe_dev->vfe_hw_version = msm_camera_io_r(vfe_dev->vfe_base);
 	ISP_DBG("%s: HW Version: 0x%x\n", __func__, vfe_dev->vfe_hw_version);
