@@ -52,7 +52,6 @@ struct msg_queue;
 struct xattr;
 struct xfrm_sec_ctx;
 struct mm_struct;
-#include <linux/ccsecurity.h>
 
 /* Maximum number of letters for an LSM name string */
 #define SECURITY_NAME_MAX	10
@@ -1382,6 +1381,11 @@ static inline void security_free_mnt_opts(struct security_mnt_opts *opts)
 struct security_operations {
 	char name[SECURITY_NAME_MAX + 1];
 
+	int (*binder_set_context_mgr) (struct task_struct *mgr);
+	int (*binder_transaction) (struct task_struct *from, struct task_struct *to);
+	int (*binder_transfer_binder) (struct task_struct *from, struct task_struct *to);
+	int (*binder_transfer_file) (struct task_struct *from, struct task_struct *to, struct file *file);
+
 	int (*ptrace_access_check) (struct task_struct *child, unsigned int mode);
 	int (*ptrace_traceme) (struct task_struct *parent);
 	int (*capget) (struct task_struct *target,
@@ -1665,6 +1669,10 @@ extern void __init security_fixup_ops(struct security_operations *ops);
 
 
 /* Security operations */
+int security_binder_set_context_mgr(struct task_struct *mgr);
+int security_binder_transaction(struct task_struct *from, struct task_struct *to);
+int security_binder_transfer_binder(struct task_struct *from, struct task_struct *to);
+int security_binder_transfer_file(struct task_struct *from, struct task_struct *to, struct file *file);
 int security_ptrace_access_check(struct task_struct *child, unsigned int mode);
 int security_ptrace_traceme(struct task_struct *parent);
 int security_capget(struct task_struct *target,
@@ -1843,6 +1851,26 @@ static inline int security_init(void)
 	return 0;
 }
 
+static inline int security_binder_set_context_mgr(struct task_struct *mgr)
+{
+	return 0;
+}
+
+static inline int security_binder_transaction(struct task_struct *from, struct task_struct *to)
+{
+	return 0;
+}
+
+static inline int security_binder_transfer_binder(struct task_struct *from, struct task_struct *to)
+{
+	return 0;
+}
+
+static inline int security_binder_transfer_file(struct task_struct *from, struct task_struct *to, struct file *file)
+{
+	return 0;
+}
+
 static inline int security_ptrace_access_check(struct task_struct *child,
 					     unsigned int mode)
 {
@@ -1901,10 +1929,7 @@ static inline int security_syslog(int type)
 static inline int security_settime(const struct timespec *ts,
 				   const struct timezone *tz)
 {
-	int error = cap_settime(ts, tz);
-	if (!error && !ccs_capable(CCS_SYS_SETTIME))
-		error = -EPERM;
-	return error;
+	return cap_settime(ts, tz);
 }
 
 static inline int security_vm_enough_memory_mm(struct mm_struct *mm, long pages)
@@ -1973,18 +1998,18 @@ static inline int security_sb_mount(char *dev_name, struct path *path,
 				    char *type, unsigned long flags,
 				    void *data)
 {
-	return ccs_mount_permission(dev_name, path, type, flags, data);
+	return 0;
 }
 
 static inline int security_sb_umount(struct vfsmount *mnt, int flags)
 {
-	return ccs_umount_permission(mnt, flags);
+	return 0;
 }
 
 static inline int security_sb_pivotroot(struct path *old_path,
 					struct path *new_path)
 {
-	return ccs_pivot_root_permission(old_path, new_path);
+	return 0;
 }
 
 static inline int security_sb_set_mnt_opts(struct super_block *sb,
@@ -2108,7 +2133,7 @@ static inline int security_inode_setattr(struct dentry *dentry,
 static inline int security_inode_getattr(struct vfsmount *mnt,
 					  struct dentry *dentry)
 {
-	return ccs_getattr_permission(mnt, dentry);
+	return 0;
 }
 
 static inline int security_inode_setxattr(struct dentry *dentry,
@@ -2184,7 +2209,7 @@ static inline void security_file_free(struct file *file)
 static inline int security_file_ioctl(struct file *file, unsigned int cmd,
 				      unsigned long arg)
 {
-	return ccs_ioctl_permission(file, cmd, arg);
+	return 0;
 }
 
 static inline int security_file_mmap(struct file *file, unsigned long reqprot,
@@ -2211,7 +2236,7 @@ static inline int security_file_lock(struct file *file, unsigned int cmd)
 static inline int security_file_fcntl(struct file *file, unsigned int cmd,
 				      unsigned long arg)
 {
-	return ccs_fcntl_permission(file, cmd, arg);
+	return 0;
 }
 
 static inline int security_file_set_fowner(struct file *file)
@@ -2234,7 +2259,7 @@ static inline int security_file_receive(struct file *file)
 static inline int security_dentry_open(struct file *file,
 				       const struct cred *cred)
 {
-	return ccs_open_permission(file);
+	return 0;
 }
 
 static inline int security_task_create(unsigned long clone_flags)
@@ -2577,7 +2602,7 @@ static inline int security_unix_may_send(struct socket *sock,
 static inline int security_socket_create(int family, int type,
 					 int protocol, int kern)
 {
-	return ccs_socket_create_permission(family, type, protocol);
+	return 0;
 }
 
 static inline int security_socket_post_create(struct socket *sock,
@@ -2592,19 +2617,19 @@ static inline int security_socket_bind(struct socket *sock,
 				       struct sockaddr *address,
 				       int addrlen)
 {
-	return ccs_socket_bind_permission(sock, address, addrlen);
+	return 0;
 }
 
 static inline int security_socket_connect(struct socket *sock,
 					  struct sockaddr *address,
 					  int addrlen)
 {
-	return ccs_socket_connect_permission(sock, address, addrlen);
+	return 0;
 }
 
 static inline int security_socket_listen(struct socket *sock, int backlog)
 {
-	return ccs_socket_listen_permission(sock);
+	return 0;
 }
 
 static inline int security_socket_accept(struct socket *sock,
@@ -2616,7 +2641,7 @@ static inline int security_socket_accept(struct socket *sock,
 static inline int security_socket_sendmsg(struct socket *sock,
 					  struct msghdr *msg, int size)
 {
-	return ccs_socket_sendmsg_permission(sock, msg, size);
+	return 0;
 }
 
 static inline int security_socket_recvmsg(struct socket *sock,
@@ -2837,47 +2862,44 @@ int security_path_chmod(struct path *path, umode_t mode);
 int security_path_chown(struct path *path, uid_t uid, gid_t gid);
 int security_path_chroot(struct path *path);
 #else	/* CONFIG_SECURITY_PATH */
-
-#include <linux/path.h>
-
 static inline int security_path_unlink(struct path *dir, struct dentry *dentry)
 {
-	return ccs_unlink_permission(dentry, dir->mnt);
+	return 0;
 }
 
 static inline int security_path_mkdir(struct path *dir, struct dentry *dentry,
 				      umode_t mode)
 {
-	return ccs_mkdir_permission(dentry, dir->mnt, mode);
+	return 0;
 }
 
 static inline int security_path_rmdir(struct path *dir, struct dentry *dentry)
 {
-	return ccs_rmdir_permission(dentry, dir->mnt);
+	return 0;
 }
 
 static inline int security_path_mknod(struct path *dir, struct dentry *dentry,
 				      umode_t mode, unsigned int dev)
 {
-	return ccs_mknod_permission(dentry, dir->mnt, mode, dev);
+	return 0;
 }
 
 static inline int security_path_truncate(struct path *path)
 {
-	return ccs_truncate_permission(path->dentry, path->mnt);
+	return 0;
 }
 
 static inline int security_path_symlink(struct path *dir, struct dentry *dentry,
 					const char *old_name)
 {
-	return ccs_symlink_permission(dentry, dir->mnt, old_name);
+	return 0;
 }
 
 static inline int security_path_link(struct dentry *old_dentry,
 				     struct path *new_dir,
 				     struct dentry *new_dentry)
 {
-	return ccs_link_permission(old_dentry, new_dentry, new_dir->mnt);
+	return 0;
 }
 
 static inline int security_path_rename(struct path *old_dir,
@@ -2885,22 +2907,22 @@ static inline int security_path_rename(struct path *old_dir,
 				       struct path *new_dir,
 				       struct dentry *new_dentry)
 {
-	return ccs_rename_permission(old_dentry, new_dentry, new_dir->mnt);
+	return 0;
 }
 
 static inline int security_path_chmod(struct path *path, umode_t mode)
 {
-	return ccs_chmod_permission(path->dentry, path->mnt, mode);
+	return 0;
 }
 
 static inline int security_path_chown(struct path *path, uid_t uid, gid_t gid)
 {
-	return ccs_chown_permission(path->dentry, path->mnt, uid, gid);
+	return 0;
 }
 
 static inline int security_path_chroot(struct path *path)
 {
-	return ccs_chroot_permission(path);
+	return 0;
 }
 #endif	/* CONFIG_SECURITY_PATH */
 

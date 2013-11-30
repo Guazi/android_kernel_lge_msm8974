@@ -8,10 +8,15 @@
 
 #define ISP_VERSION_40        40
 #define ISP_VERSION_32        32
-#define ISP_NATIVE_BUF_BIT    0x10000
-#define ISP0_BIT              0x20000
-#define ISP1_BIT              0x40000
+#define ISP_NATIVE_BUF_BIT    (0x10000 << 0)
+#define ISP0_BIT              (0x10000 << 1)
+#define ISP1_BIT              (0x10000 << 2)
+#define ISP_META_CHANNEL_BIT  (0x10000 << 3)
+#define ISP_SCRATCH_BUF_BIT   (0x10000 << 4)
 #define ISP_STATS_STREAM_BIT  0x80000000
+
+#define ISP_REG_CFG_NUM_CFG_MAX (10)
+#define ISP_REG_CFG_CMD_LEN_MAX (3 * 1024)
 
 enum ISP_START_PIXEL_PATTERN {
 	ISP_BAYER_RGRGRG,
@@ -161,12 +166,14 @@ enum msm_vfe_axi_stream_update_type {
 	ENABLE_STREAM_BUF_DIVERT,
 	DISABLE_STREAM_BUF_DIVERT,
 	UPDATE_STREAM_FRAMEDROP_PATTERN,
+	UPDATE_STREAM_REQUEST_FRAMES,
 };
 
 struct msm_vfe_axi_stream_update_cmd {
 	uint32_t stream_handle;
 	enum msm_vfe_axi_stream_update_type update_type;
 	enum msm_vfe_frame_skip_pattern skip_pattern;
+	uint32_t request_frm_num;
 };
 
 enum msm_isp_stats_type {
@@ -335,6 +342,8 @@ struct msm_isp_event_data {
 	 *which use monotonic clock
 	 */
 	struct timeval timestamp;
+	/* Monotonic timestamp since bootup */
+	struct timeval mono_timestamp;
 	/* if pix is a src frame_id is from camif */
 	uint32_t frame_id;
 	union {
@@ -403,5 +412,9 @@ struct msm_isp_event_data {
 
 #define VIDIOC_MSM_ISP_UPDATE_STREAM \
 	_IOWR('V', BASE_VIDIOC_PRIVATE+13, struct msm_vfe_axi_stream_update_cmd)
+
+#define VIDIOC_MSM_ISP_CONFIG_DONE \
+	_IOWR('V', BASE_VIDIOC_PRIVATE+14, int)
+
 
 #endif /* __MSMB_ISP__ */

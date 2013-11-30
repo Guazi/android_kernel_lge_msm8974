@@ -198,6 +198,8 @@ struct input_keymap_entry {
 #define SYN_CONFIG		1
 #define SYN_MT_REPORT		2
 #define SYN_DROPPED		3
+#define SYN_TIME_SEC		4
+#define SYN_TIME_NSEC		5
 
 /*
  * Keys and buttons
@@ -470,9 +472,6 @@ struct input_keymap_entry {
 
 #define KEY_MICMUTE		248	/* Mute / unmute the microphone */
 
-#if defined CONFIG_MACH_MSM8974_VU3_KR
-#define KEY_QUICK_CLIP	250 /*LGE Quick clip button*/
-#endif
 /* Code 255 is reserved for special needs of AT keyboard driver */
 
 #define BTN_MISC		0x100
@@ -939,9 +938,7 @@ struct input_keymap_entry {
  */
 #define MT_TOOL_FINGER		0
 #define MT_TOOL_PEN		1
-#define MT_TOOL_PALM		2
-#define MT_TOOL_LARGEPALM	3
-#define MT_TOOL_MAX		3
+#define MT_TOOL_MAX		1
 
 /*
  * Values describing the status of a force-feedback effect
@@ -1318,7 +1315,9 @@ struct input_dev {
 	struct mutex mutex;
 
 	unsigned int users;
+	unsigned int users_private;
 	bool going_away;
+	bool disabled;
 
 	bool sync;
 
@@ -1515,7 +1514,7 @@ void input_inject_event(struct input_handle *handle, unsigned int type, unsigned
 
 static inline void input_report_key(struct input_dev *dev, unsigned int code, int value)
 {
-	input_event(dev, EV_KEY, code, value);
+	input_event(dev, EV_KEY, code, !!value);
 }
 
 static inline void input_report_rel(struct input_dev *dev, unsigned int code, int value)

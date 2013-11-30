@@ -997,8 +997,6 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 				/* Add the current time stamp */
 				char tbuf[50], *tp;
 				unsigned tlen;
-				/* change kernel timestamp format from cpu time to cpu time / local time */
-#ifdef CONFIG_LGE_USE_CPU_CLOCK_TIMESTAMP
 				unsigned long long t;
 				unsigned long nanosec_rem;
 
@@ -1007,41 +1005,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 				tlen = sprintf(tbuf, "[%5lu.%06lu] ",
 						(unsigned long) t,
 						nanosec_rem / 1000);
-#else
-				unsigned long long t;
-				unsigned long nanosec_rem;
 
-				struct timespec time;
-				struct tm tmresult;
-
-				t = cpu_clock(printk_cpu);
-				nanosec_rem = do_div(t, 1000000000);
-
-				time = __current_kernel_time();
-				time_to_tm(time.tv_sec,sys_tz.tz_minuteswest * 60* (-1),&tmresult);
-#ifdef CONFIG_MACH_MSM8974_VU3_KR
-				tlen = sprintf(tbuf, "[%5lu.%06lu / %02d-%02d %02d:%02d:%02d.%03lu]/CPU:%d ",
-						(unsigned long) t,
-						nanosec_rem / 1000,
-						tmresult.tm_mon+1,
-						tmresult.tm_mday,
-						tmresult.tm_hour,
-						tmresult.tm_min,
-						tmresult.tm_sec,
-						(unsigned long) time.tv_nsec/1000000,
-						printk_cpu);
-#else
-				tlen = sprintf(tbuf, "[%5lu.%06lu / %02d-%02d %02d:%02d:%02d.%03lu] ",
-						(unsigned long) t,
-						nanosec_rem / 1000,
-						tmresult.tm_mon+1,
-						tmresult.tm_mday,
-						tmresult.tm_hour,
-						tmresult.tm_min,
-						tmresult.tm_sec,
-						(unsigned long) time.tv_nsec/1000000);
-#endif
-#endif
 				for (tp = tbuf; tp < tbuf + tlen; tp++)
 					emit_log_char(*tp);
 				printed_len += tlen;
@@ -1220,6 +1184,13 @@ module_param_named(console_suspend, console_suspend_enabled,
 		bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(console_suspend, "suspend console during suspend"
 	" and hibernate operations");
+
+
+/* check current suspend/resume status of the console */
+int is_console_suspended(void)
+{
+	return console_suspended;
+}
 
 /**
  * suspend_console - suspend the console subsystem
@@ -1434,10 +1405,8 @@ again:
 		retry = 1;
 	raw_spin_unlock_irqrestore(&logbuf_lock, flags);
 
-	if (retry && console_trylock()) {
-		retry = 0;
+	if (retry && console_trylock())
 		goto again;
-	}
 
 	if (wake_klogd)
 		wake_up_klogd();
