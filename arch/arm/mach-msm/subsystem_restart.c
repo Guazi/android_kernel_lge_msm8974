@@ -38,7 +38,6 @@
 #include <mach/socinfo.h>
 #include <mach/subsystem_notif.h>
 #include <mach/subsystem_restart.h>
-
 #ifdef CONFIG_LGE_HANDLE_PANIC
 #include <mach/lge_handle_panic.h>
 #endif
@@ -140,6 +139,7 @@ struct restart_log {
  * @dentry: debugfs directory for this device
  * @do_ramdump_on_put: ramdump on subsystem_put() if true
  * @err_ready: completion variable to record error ready from subsystem
+ * @crashed: indicates if subsystem has crashed
  */
 struct subsys_device {
 	struct subsys_desc *desc;
@@ -163,11 +163,8 @@ struct subsys_device {
 	struct miscdevice misc_dev;
 	char miscdevice_name[32];
 	struct completion err_ready;
+	bool crashed;
 };
-
-#ifdef CONFIG_MACH_LGE
-static int modem_reboot_cnt = 0;
-#endif
 
 static struct subsys_device *to_subsys(struct device *d)
 {
@@ -264,10 +261,6 @@ static DEFINE_IDA(subsys_ida);
 
 static int enable_ramdumps;
 module_param(enable_ramdumps, int, S_IRUGO | S_IWUSR);
-
-#ifdef CONFIG_MACH_LGE
-module_param(modem_reboot_cnt, int, S_IRUGO | S_IWUSR);
-#endif
 
 struct workqueue_struct *ssr_wq;
 
@@ -396,6 +389,10 @@ static void do_epoch_check(struct subsys_device *dev)
 	if (time_first && n >= max_restarts_check) {
 		if ((curr_time->tv_sec - time_first->tv_sec) <
 				max_history_time_check)
+#ifdef CONFIG_LGE_HANDLE_PANIC
+			lge_set_magic_subsystem(dev->desc->name,
+					LGE_ERR_SUB_SD);
+#endif
 			panic("Subsystems have crashed %d times in less than "
 				"%ld seconds!", max_restarts_check,
 				max_history_time_check);
@@ -482,13 +479,18 @@ static void subsystem_powerup(struct subsys_device *dev, void *data)
 #ifdef CONFIG_LGE_HANDLE_PANIC
 		lge_set_magic_subsystem(name, LGE_ERR_SUB_PWR);
 #endif
-		panic("[%p]: Failed to powerup %s!", current, name);
+		panic("[%p]: Powerup error: %s!", current, name);
 	}
 
 	ret = wait_for_err_ready(dev);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_LGE_HANDLE_PANIC
+		lge_set_magic_subsystem(name, LGE_ERR_SUB_PWR);
+#endif
 		panic("[%p]: Timed out waiting for error ready: %s!",
 			current, name);
+	}
+
 	subsys_set_state(dev, SUBSYS_ONLINE);
 }
 
@@ -592,11 +594,6 @@ void *subsystem_get(const char *name)
 			retval = ERR_PTR(ret);
 			goto err_start;
 		}
-		/* QCT Debug code for modem stuck issue,
-	 	 * secheol.pyo@lge.com, 2013-05-01*/
-		pr_info("[LGE Debug] subsys: %s get start %d by %d[%s]\n",
-			name, subsys->count,
-			current->pid, current->comm);
 	}
 	subsys->count++;
 	mutex_unlock(&track->lock);
@@ -633,30 +630,9 @@ void subsystem_put(void *subsystem)
 			subsys->desc->name, __func__))
 		goto err_out;
 	if (!--subsys->count) {
-/* [LGE_S]QCT Debug code for modem stuck issue,
- * secheol.pyo@lge.com, 2013-05-01
- */
-		pr_info("[LGE DEBUG]subsys: %s put stop %d by %d[%s]\n",
-			 subsys->desc->name, subsys->count,
-			 current->pid, current->comm);
-#if 0
 		subsys_stop(subsys);
 		if (subsys->do_ramdump_on_put)
 			subsystem_ramdump(subsys, NULL);
-#else
-		if (strncmp(subsys->desc->name, "modem", 5)) {
-			subsys_stop(subsys);
-			if (subsys->do_ramdump_on_put)
-				subsystem_ramdump(subsys, NULL);
-		}
-		else {
-			pr_info("[LGE DEBUG]subsys: block modem put stop for stabilty\n");
-			subsys->count++;
-		}
-#endif
-/* [LGE_E]QCT Debug code for modem stuck issue,
- * secheol.pyo@lge.com, 2013-05-01
- */
 	}
 	mutex_unlock(&track->lock);
 
@@ -764,6 +740,9 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 			wake_lock(&dev->wake_lock);
 			queue_work(ssr_wq, &dev->work);
 		} else {
+#ifdef CONFIG_LGE_HANDLE_PANIC
+			lge_set_magic_subsystem(name, LGE_ERR_SUB_SD);
+#endif
 			panic("Subsystem %s crashed during SSR!", name);
 		}
 	}
@@ -773,6 +752,9 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 int subsystem_restart_dev(struct subsys_device *dev)
 {
 	const char *name;
+#ifdef CONFIG_LGE_HANDLE_PANIC
+	int saved_restart_level = dev->restart_level;
+#endif
 
 	if (!get_device(&dev->dev))
 		return -ENODEV;
@@ -795,21 +777,25 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		return -EBUSY;
 	}
 
-	pr_info("Restart sequence requested for %s, restart_level = %s.\n",
-		name, restart_levels[dev->restart_level]);
-
-#ifdef CONFIG_MACH_LGE
-	if (!strcmp(name, "modem")) {
-		modem_reboot_cnt++;
-		if (modem_reboot_cnt <= 0)
-			modem_reboot_cnt = 1;
+#ifdef CONFIG_LGE_HANDLE_PANIC
+	if (lge_is_crash_skipped()) {
+		pr_info("Restart requested intentionally\n");
+		dev->restart_level = RESET_SUBSYS_COUPLED;
 	}
 #endif
+	pr_info("Restart sequence requested for %s, restart_level = %s.\n",
+		name, restart_levels[dev->restart_level]);
 
 	switch (dev->restart_level) {
 
 	case RESET_SUBSYS_COUPLED:
 		__subsystem_restart_dev(dev);
+#ifdef CONFIG_LGE_HANDLE_PANIC
+		if (lge_is_crash_skipped()) {
+			dev->restart_level = saved_restart_level;
+			lge_clear_crash_skipped();
+		}
+#endif
 		break;
 	case RESET_SOC:
 #ifdef CONFIG_LGE_HANDLE_PANIC
@@ -845,39 +831,6 @@ int subsystem_restart(const char *name)
 }
 EXPORT_SYMBOL(subsystem_restart);
 
-/**
- * subsys_modem_restart() - modem restart silently
- *
- * modem restart silently
- */
-int subsys_modem_restart(void)
-{
-	int ret;
-	int rsl;
-	struct subsys_tracking *track;
-
-	struct subsys_device *dev = find_subsys("modem");
-
-	if (!dev)
-		return -ENODEV;
-
-	track = subsys_get_track(dev);
-
-	if (dev->track.state != SUBSYS_ONLINE ||
-		track->p_state != SUBSYS_NORMAL)
-		return -ENODEV;
-
-	rsl = dev->restart_level;
-	dev->restart_level = RESET_SUBSYS_COUPLED;
-	ret = subsystem_restart_dev(dev);
-	dev->restart_level = rsl;
-	modem_reboot_cnt--;
-
-	put_device(&dev->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsys_modem_restart);
-
 int subsystem_crashed(const char *name)
 {
 	struct subsys_device *dev = find_subsys(name);
@@ -905,6 +858,15 @@ int subsystem_crashed(const char *name)
 }
 EXPORT_SYMBOL(subsystem_crashed);
 
+void subsys_set_crash_status(struct subsys_device *dev, bool crashed)
+{
+	dev->crashed = true;
+}
+
+bool subsys_get_crash_status(struct subsys_device *dev)
+{
+	return dev->crashed;
+}
 #ifdef CONFIG_DEBUG_FS
 static ssize_t subsys_debugfs_read(struct file *filp, char __user *ubuf,
 		size_t cnt, loff_t *ppos)

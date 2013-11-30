@@ -44,121 +44,21 @@
    and provided to the battery driver in the units desired for
    their framework which is 0.1DegC. True resolution of 0.1DegC
    will result in the below table size to increase by 10 times */
-#ifdef CONFIG_LGE_PM		//Using Batt Thermistor 68K in room temperature
-static const struct qpnp_vadc_map_pt adcmap_btm_threshold[] = {
-	{-300, 1669},
-	{-290, 1662},
-	{-280, 1653},
-	{-270, 1644},
-	{-260, 1635},
-	{-250, 1626},
-	{-240, 1616},
-	{-230, 1605},
-	{-220, 1594},
-	{-210, 1583},
-	{-200, 1572},
-	{-190, 1560},
-	{-180, 1547},
-	{-170, 1534},
-	{-160, 1521},
-	{-150, 1507},
-	{-140, 1493},
-	{-130, 1478},
-	{-120, 1463},
-	{-110, 1448},
-	{-100, 1432},
-	{-90, 1415},
-	{-80, 1399},
-	{-70, 1382},
-	{-60, 1365},
-	{-50, 1347},
-	{-40, 1329},
-	{-30, 1311},
-	{-20, 1293},
-	{-10, 1274},
-	{0, 1255},
-	{10, 1236},
-	{20, 1217},
-	{30, 1198},
-	{40, 1179},
-	{50, 1159},
-	{60, 1140},
-	{70, 1120},
-	{80, 1101},
-	{90, 1081},
-	{100, 1062},
-	{110, 1042},
-	{120, 1023},
-	{130, 1004},
-	{140, 985},
-	{150, 966},
-	{160, 947},
-	{170, 929},
-	{180, 910},
-	{190, 892},
-	{200, 874},
-	{210, 857},
-	{220, 840},
-	{230, 823},
-	{240, 806},
-	{250, 790},
-	{260, 774},
-	{270, 758},
-	{280, 743},
-	{290, 728},
-	{300, 713},
-	{310, 699},
-	{320, 685},
-	{330, 671},
-	{340, 658},
-	{350, 645},
-	{360, 632},
-	{370, 620},
-	{380, 608},
-	{390, 597},
-	{400, 585},
-	{410, 574},
-	{420, 564},
-	{430, 554},
-	{440, 544},
-	{450, 534},
-	{460, 525},
-	{470, 516},
-	{480, 507},
-	{490, 498},
-	{500, 490},
-	{510, 482},
-	{520, 475},
-	{530, 467},
-	{540, 460},
-	{550, 453},
-	{560, 446},
-	{570, 440},
-	{580, 434},
-	{590, 428},
-	{600, 422},
-	{610, 416},
-	{620, 411},
-	{630, 405},
-	{640, 400},
-	{650, 395},
-	{660, 391},
-	{670, 386},
-	{680, 382},
-	{690, 377},
-	{700, 373},
-	{710, 369},
-	{720, 366},
-	{730, 362},
-	{740, 358},
-	{750, 355},
-	{760, 352},
-	{770, 348},
-	{780, 345},
-	{790, 342}
-};
-#else //QCT original
-static const struct qpnp_vadc_map_pt adcmap_btm_threshold[] = {
+
+static bool adcmap_use_dt = false;
+static const struct qpnp_vadc_map_pt *adcmap_btm_threshold = NULL;
+static int adcmap_btm_threshold_size = 0;
+
+static const struct qpnp_vadc_map_pt *adcmap_qrd_btm_threshold = NULL;
+static int adcmap_qrd_btm_threshold_size = 0;
+
+static const struct qpnp_vadc_map_pt *adcmap_100k_104ef_104fb = NULL;
+static int adcmap_100k_104ef_104fb_size = 0;
+
+static const struct qpnp_vadc_map_pt *adcmap_150k_104ef_104fb = NULL;
+static int adcmap_150k_104ef_104fb_size = 0;
+
+static const struct qpnp_vadc_map_pt adcmap_btm_threshold_def[] = {
 	{-300,	1642},
 	{-200,	1544},
 	{-100,	1414},
@@ -244,9 +144,7 @@ static const struct qpnp_vadc_map_pt adcmap_btm_threshold[] = {
 	{790,	203}
 };
 
-#endif
-
-static const struct qpnp_vadc_map_pt adcmap_qrd_btm_threshold[] = {
+static const struct qpnp_vadc_map_pt adcmap_qrd_btm_threshold_def[] = {
 	{-200,	1672},
 	{-180,	1656},
 	{-160,	1639},
@@ -301,7 +199,7 @@ static const struct qpnp_vadc_map_pt adcmap_qrd_btm_threshold[] = {
 };
 
 /* Voltage to temperature */
-static const struct qpnp_vadc_map_pt adcmap_100k_104ef_104fb[] = {
+static const struct qpnp_vadc_map_pt adcmap_100k_104ef_104fb_def[] = {
 	{1758,	-40},
 	{1742,	-35},
 	{1719,	-30},
@@ -339,7 +237,7 @@ static const struct qpnp_vadc_map_pt adcmap_100k_104ef_104fb[] = {
 };
 
 /* Voltage to temperature */
-static const struct qpnp_vadc_map_pt adcmap_150k_104ef_104fb[] = {
+static const struct qpnp_vadc_map_pt adcmap_150k_104ef_104fb_def[] = {
 	{1738,	-40},
 	{1714,	-35},
 	{1682,	-30},
@@ -608,7 +506,7 @@ int32_t qpnp_adc_tdkntcg_therm(int32_t adc_code,
 			adc_properties, chan_properties);
 
 	qpnp_adc_map_voltage_temp(adcmap_100k_104ef_104fb,
-		ARRAY_SIZE(adcmap_100k_104ef_104fb),
+		adcmap_100k_104ef_104fb_size,
 		xo_thm, &adc_chan_result->physical);
 
 	return 0;
@@ -627,7 +525,7 @@ int32_t qpnp_adc_scale_batt_therm(int32_t adc_code,
 
 	return qpnp_adc_map_temp_voltage(
 			adcmap_btm_threshold,
-			ARRAY_SIZE(adcmap_btm_threshold),
+			adcmap_btm_threshold_size,
 			bat_voltage,
 			&adc_chan_result->physical);
 }
@@ -645,7 +543,7 @@ int32_t qpnp_adc_scale_qrd_batt_therm(int32_t adc_code,
 
 	return qpnp_adc_map_temp_voltage(
 			adcmap_qrd_btm_threshold,
-			ARRAY_SIZE(adcmap_qrd_btm_threshold),
+			adcmap_qrd_btm_threshold_size,
 			bat_voltage,
 			&adc_chan_result->physical);
 }
@@ -662,7 +560,7 @@ int32_t qpnp_adc_scale_therm_pu1(int32_t adc_code,
 			adc_properties, chan_properties);
 
 	qpnp_adc_map_voltage_temp(adcmap_150k_104ef_104fb,
-		ARRAY_SIZE(adcmap_150k_104ef_104fb),
+		adcmap_150k_104ef_104fb_size,
 		therm_voltage, &adc_chan_result->physical);
 
 	return 0;
@@ -680,7 +578,7 @@ int32_t qpnp_adc_scale_therm_pu2(int32_t adc_code,
 			adc_properties, chan_properties);
 
 	qpnp_adc_map_voltage_temp(adcmap_100k_104ef_104fb,
-		ARRAY_SIZE(adcmap_100k_104ef_104fb),
+		adcmap_100k_104ef_104fb_size,
 		therm_voltage, &adc_chan_result->physical);
 
 	return 0;
@@ -704,7 +602,7 @@ int32_t qpnp_adc_tm_scale_voltage_therm_pu2(uint32_t reg, int64_t *result)
 	do_div(adc_voltage, param1.dy);
 
 	qpnp_adc_map_voltage_temp(adcmap_100k_104ef_104fb,
-		ARRAY_SIZE(adcmap_100k_104ef_104fb),
+		adcmap_100k_104ef_104fb_size,
 		adc_voltage, result);
 	if (negative_offset)
 		adc_voltage = -adc_voltage;
@@ -721,7 +619,7 @@ int32_t qpnp_adc_tm_scale_therm_voltage_pu2(struct qpnp_adc_tm_config *param)
 	qpnp_get_vadc_gain_and_offset(&param1, CALIB_RATIOMETRIC);
 
 	rc = qpnp_adc_map_temp_voltage(adcmap_100k_104ef_104fb,
-		ARRAY_SIZE(adcmap_100k_104ef_104fb),
+		adcmap_100k_104ef_104fb_size,
 		param->low_thr_temp, &param->low_thr_voltage);
 	if (rc)
 		return rc;
@@ -731,7 +629,7 @@ int32_t qpnp_adc_tm_scale_therm_voltage_pu2(struct qpnp_adc_tm_config *param)
 	param->low_thr_voltage += param1.adc_gnd;
 
 	rc = qpnp_adc_map_temp_voltage(adcmap_100k_104ef_104fb,
-		ARRAY_SIZE(adcmap_100k_104ef_104fb),
+		adcmap_100k_104ef_104fb_size,
 		param->high_thr_temp, &param->high_thr_voltage);
 	if (rc)
 		return rc;
@@ -893,7 +791,7 @@ int32_t qpnp_adc_btm_scaler(struct qpnp_adc_tm_btm_param *param,
 				param->low_temp);
 	rc = qpnp_adc_map_voltage_temp(
 		adcmap_btm_threshold,
-		ARRAY_SIZE(adcmap_btm_threshold),
+		adcmap_btm_threshold_size,
 		(param->low_temp),
 		&low_output);
 	if (rc) {
@@ -908,7 +806,7 @@ int32_t qpnp_adc_btm_scaler(struct qpnp_adc_tm_btm_param *param,
 
 	rc = qpnp_adc_map_voltage_temp(
 		adcmap_btm_threshold,
-		ARRAY_SIZE(adcmap_btm_threshold),
+		adcmap_btm_threshold_size,
 		(param->high_temp),
 		&high_output);
 	if (rc) {
@@ -1039,8 +937,12 @@ int32_t qpnp_adc_get_devicetree_data(struct spmi_device *spmi,
 			pr_err("Invalid channel fast average setup\n");
 			return -EINVAL;
 		}
-		calibration_param = of_get_property(child,
-				"qcom,calibration-type", NULL);
+		rc = of_property_read_string(child, "qcom,calibration-type",
+							&calibration_param);
+		if (rc) {
+			pr_err("Invalid calibration type\n");
+			return -EINVAL;
+		}
 		if (!strncmp(calibration_param, "absolute", 8))
 			calib_type = CALIB_ABSOLUTE;
 		else if (!strncmp(calibration_param, "ratiometric", 11))
@@ -1098,3 +1000,213 @@ int32_t qpnp_adc_get_devicetree_data(struct spmi_device *spmi,
 	return 0;
 }
 EXPORT_SYMBOL(qpnp_adc_get_devicetree_data);
+
+static int adcmap_get_devtree(struct device_node *np,
+		char *key, int len, struct qpnp_vadc_map_pt *map)
+{
+	int *buf;
+	int ret, i;
+
+	buf = kzalloc(sizeof(int32_t) * len * 4, GFP_KERNEL);
+	if (!buf) {
+		pr_err("Unable to allocate memory\n");
+		return -ENOMEM;
+	}
+
+	ret = of_property_read_u32_array(np, key, buf, len * 4);
+	if (ret) {
+		pr_err("Invalid %s.\n", key);
+		kfree(buf);
+		return -EINVAL;
+	}
+
+	for(i = 0; i < len; i++) {
+		map[i].x = (buf[i*4] == 0 ? buf[i*4+2] : buf[i*4+2]*(-1));
+		map[i].y = (buf[i*4+1] == 0 ? buf[i*4+3] : buf[i*4+3]*(-1));
+	}
+
+	kfree(buf);
+	return 0;
+}
+
+static int set_adcmap_data(struct device_node *np,
+		const struct qpnp_vadc_map_pt **adcmap,
+		int *size, char *len_key, char *threshold_key)
+{
+	struct qpnp_vadc_map_pt *buf;
+	int len, rc;
+
+	rc = of_property_read_u32(np, len_key,	&len);
+	if (rc) {
+		pr_err("Invalid adcmap_btm_data_num property\n");
+		return -EINVAL;
+	}
+	*size = len;
+
+	buf = kzalloc(sizeof(struct qpnp_vadc_map_pt) * len, GFP_KERNEL);
+	if (!buf) {
+		pr_err("Unable to allocate memory\n");
+		return -ENOMEM;
+	}
+
+	rc = adcmap_get_devtree(np, threshold_key, len, buf);
+	if (rc) {
+		pr_err("adcmap_get_devtree failed\n");
+		kfree(buf);
+		return -EINVAL;
+	}
+
+	*adcmap = buf;
+	return 0;
+}
+
+static int qpnp_adcmap_dt(struct device_node *np)
+{
+	int rc;
+
+	rc = set_adcmap_data(np,
+			&adcmap_btm_threshold,
+			&adcmap_btm_threshold_size,
+			"qcom,adcmap_btm_data_num",
+			"qcom,adcmap_btm_threshold");
+	if (rc) {
+		pr_err("failed to get adcmap_btm_threshold\n");
+		goto err_parse_dt_btm_threshold;
+	}
+
+	rc = set_adcmap_data(np,
+			&adcmap_qrd_btm_threshold,
+			&adcmap_qrd_btm_threshold_size,
+			"qcom,adcmap_qrd_btm_data_num",
+			"qcom,adcmap_qrd_btm_threshold");
+	if (rc) {
+		pr_err("failed to get adcmap_qrd_btm_threshold\n");
+		goto err_parse_dt_qrd_btm_threshold;
+	}
+
+	rc = set_adcmap_data(np,
+			&adcmap_100k_104ef_104fb,
+			&adcmap_100k_104ef_104fb_size,
+			"qcom,adcmap_adcmap_100k_data_num",
+			"qcom,adcmap_100k_104ef_104fb");
+	if (rc) {
+		pr_err("failed to get adcmap_100k_104ef_104fb\n");
+		goto err_parse_dt_100k_104ef_104fb;
+	}
+
+	rc = set_adcmap_data(np,
+			&adcmap_150k_104ef_104fb,
+			&adcmap_150k_104ef_104fb_size,
+			"qcom,adcmap_adcmap_100k_data_num",
+			"qcom,adcmap_150k_104ef_104fb");
+	if (rc) {
+		pr_err("failed to get adcmap_150k_104ef_104fb table\n");
+		goto err_parse_dt_150k_104ef_104fb;
+	}
+
+	return 0;
+
+err_parse_dt_150k_104ef_104fb:
+	kfree(adcmap_100k_104ef_104fb);
+	adcmap_100k_104ef_104fb = NULL;
+	adcmap_100k_104ef_104fb_size = 0;
+err_parse_dt_100k_104ef_104fb:
+	kfree(adcmap_qrd_btm_threshold);
+	adcmap_qrd_btm_threshold = NULL;
+	adcmap_qrd_btm_threshold_size = 0;
+err_parse_dt_qrd_btm_threshold:
+	kfree(adcmap_btm_threshold);
+	adcmap_btm_threshold = NULL;
+	adcmap_btm_threshold_size = 0;
+err_parse_dt_btm_threshold:
+	return rc;
+}
+
+static int qpnp_adcmap_probe(struct spmi_device *pdev)
+{
+	int rc;
+
+	if (pdev->dev.of_node) {
+		rc = qpnp_adcmap_dt(pdev->dev.of_node);
+		if (rc >= 0) {
+			adcmap_use_dt = true;
+			pr_info("Use adcmap from dt\n");
+		}
+	}
+
+	if (!adcmap_use_dt) {
+		pr_info("Use default adcmap\n");
+		adcmap_btm_threshold = adcmap_btm_threshold_def;
+		adcmap_btm_threshold_size =
+			ARRAY_SIZE(adcmap_btm_threshold_def);
+
+		adcmap_qrd_btm_threshold = adcmap_qrd_btm_threshold_def;
+		adcmap_qrd_btm_threshold_size =
+			ARRAY_SIZE(adcmap_qrd_btm_threshold_def);
+
+		adcmap_150k_104ef_104fb = adcmap_150k_104ef_104fb_def;
+		adcmap_150k_104ef_104fb_size =
+			ARRAY_SIZE(adcmap_150k_104ef_104fb_def);
+
+		adcmap_100k_104ef_104fb = adcmap_100k_104ef_104fb_def;
+		adcmap_100k_104ef_104fb_size =
+			ARRAY_SIZE(adcmap_100k_104ef_104fb_def);
+	}
+
+	return 0;
+}
+
+static int qpnp_adcmap_remove(struct spmi_device *pdev)
+{
+	if (adcmap_use_dt) {
+		kfree(adcmap_btm_threshold);
+		kfree(adcmap_qrd_btm_threshold);
+		kfree(adcmap_100k_104ef_104fb);
+		kfree(adcmap_150k_104ef_104fb);
+	}
+
+	return 0;
+}
+
+static const struct of_device_id qpnp_adcmap_match_table[] = {
+	{	.compatible = "qcom,adcmap_table" },
+	{}
+};
+
+static struct spmi_driver qpnp_adcmap_driver = {
+	.driver = {
+		.name = "adcmap_table",
+		.of_match_table = qpnp_adcmap_match_table,
+	},
+	.probe = qpnp_adcmap_probe,
+	.remove = qpnp_adcmap_remove,
+};
+
+static int __init qpnp_adcmap_init(void)
+{
+	adcmap_btm_threshold = adcmap_btm_threshold_def;
+	adcmap_btm_threshold_size =
+		ARRAY_SIZE(adcmap_btm_threshold_def);
+
+	adcmap_qrd_btm_threshold = adcmap_qrd_btm_threshold_def;
+	adcmap_qrd_btm_threshold_size =
+		ARRAY_SIZE(adcmap_qrd_btm_threshold_def);
+
+	adcmap_150k_104ef_104fb = adcmap_150k_104ef_104fb_def;
+	adcmap_150k_104ef_104fb_size =
+		ARRAY_SIZE(adcmap_150k_104ef_104fb_def);
+
+	adcmap_100k_104ef_104fb = adcmap_100k_104ef_104fb_def;
+	adcmap_100k_104ef_104fb_size =
+		ARRAY_SIZE(adcmap_100k_104ef_104fb_def);
+
+	return spmi_driver_register(&qpnp_adcmap_driver);
+}
+
+static void __exit qpnp_adcmap_exit(void)
+{
+	spmi_driver_unregister(&qpnp_adcmap_driver);
+}
+
+arch_initcall(qpnp_adcmap_init);
+module_exit(qpnp_adcmap_exit);
