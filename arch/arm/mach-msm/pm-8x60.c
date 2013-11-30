@@ -59,10 +59,7 @@
 #include "timer.h"
 #include "pm-boot.h"
 #include <mach/event_timer.h>
-
-#ifdef CONFIG_LGE_PM
-#include <mach/board_lge.h>
-#endif
+#include <linux/cpu_pm.h>
 
 #define SCM_L2_RETENTION	(0x2)
 #define SCM_CMD_TERMINATE_PC	(0x2)
@@ -483,10 +480,17 @@ static bool __ref msm_pm_spm_power_collapse(
 	void *entry;
 	bool collapsed = 0;
 	int ret;
+	unsigned int saved_gic_cpu_ctrl;
+
+	saved_gic_cpu_ctrl = readl_relaxed(MSM_QGIC_CPU_BASE + GIC_CPU_CTRL);
+	mb();
 
 	if (MSM_PM_DEBUG_POWER_COLLAPSE & msm_pm_debug_mask)
 		pr_info("CPU%u: %s: notify_rpm %d\n",
 			cpu, __func__, (int) notify_rpm);
+
+	if (from_idle == true)
+		cpu_pm_enter();
 
 	ret = msm_spm_set_low_power_mode(
 			MSM_SPM_MODE_POWER_COLLAPSE, notify_rpm);
@@ -502,6 +506,9 @@ static bool __ref msm_pm_spm_power_collapse(
 	if (from_idle && msm_pm_pc_reset_timer)
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
 
+#ifdef CONFIG_VFP
+	vfp_pm_suspend();
+#endif
 	collapsed = msm_pm_collapse();
 
 	if (from_idle && msm_pm_pc_reset_timer)
@@ -510,7 +517,14 @@ static bool __ref msm_pm_spm_power_collapse(
 	msm_pm_boot_config_after_pc(cpu);
 
 	if (collapsed) {
+#ifdef CONFIG_VFP
+		vfp_pm_resume();
+#endif
 		cpu_init();
+		writel(0xF0, MSM_QGIC_CPU_BASE + GIC_CPU_PRIMASK);
+		writel_relaxed(saved_gic_cpu_ctrl,
+				MSM_QGIC_CPU_BASE + GIC_CPU_CTRL);
+		mb();
 		local_fiq_enable();
 	}
 
@@ -520,6 +534,10 @@ static bool __ref msm_pm_spm_power_collapse(
 
 	ret = msm_spm_set_low_power_mode(MSM_SPM_MODE_CLOCK_GATING, false);
 	WARN_ON(ret);
+
+	if (from_idle == true)
+		cpu_pm_exit();
+
 	return collapsed;
 }
 
@@ -1068,10 +1086,6 @@ static int msm_pm_enter(suspend_state_t state)
 			pr_info("%s: power collapse\n", __func__);
 
 		clock_debug_print_enabled();
-
-#ifdef CONFIG_LGE_PM
-		gpio_debug_print();
-#endif
 
 		if (msm_pm_sleep_time_override > 0) {
 			int64_t ns = NSEC_PER_SEC *
