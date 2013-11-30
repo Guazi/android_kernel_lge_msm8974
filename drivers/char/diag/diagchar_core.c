@@ -42,9 +42,6 @@
 #include "diag_debugfs.h"
 #include "diag_masks.h"
 #include "diagfwd_bridge.h"
-#if defined(CONFIG_MACH_MSM8974_G2_DCM) || defined(CONFIG_MACH_MSM8974_G2_KDDI) || defined(CONFIG_MACH_MSM8974_Z_KDDI)
-#include <mach/board_lge.h>
-#endif
 
 MODULE_DESCRIPTION("Diag Char Driver");
 MODULE_LICENSE("GPL v2");
@@ -272,6 +269,7 @@ static int diagchar_close(struct inode *inode, struct file *file)
 		 DCI_CLIENT_INDEX_INVALID)
 		diagchar_ioctl(NULL, DIAG_IOCTL_DCI_DEINIT, 0);
 	/* If the exiting process is the socket process */
+	mutex_lock(&driver->diagchar_mutex);
 	if (driver->socket_process &&
 		(driver->socket_process->tgid == current->tgid)) {
 		driver->socket_process = NULL;
@@ -280,6 +278,7 @@ static int diagchar_close(struct inode *inode, struct file *file)
 		(driver->callback_process->tgid == current->tgid)) {
 		driver->callback_process = NULL;
 	}
+	mutex_unlock(&driver->diagchar_mutex);
 
 #ifdef CONFIG_DIAG_OVER_USB
 	/* If the SD logging process exits, change logging to USB mode */
@@ -598,7 +597,7 @@ int diag_command_reg(unsigned long ioarg)
 	}
 	head_params = kzalloc(pkt_params.count*sizeof(
 		struct bindpkt_params), GFP_KERNEL);
-	if (!head_params) {
+	if (ZERO_OR_NULL_PTR(head_params)) {
 		pr_err("diag: unable to alloc memory\n");
 		return -ENOMEM;
 	} else
@@ -1246,17 +1245,6 @@ drop:
 						data->write_ptr_1->length);
 					data->in_busy_1 = 0;
 				}
-				if (data->in_busy_2 == 1) {
-					num_data++;
-					/*Copy the length of data being passed*/
-					COPY_USER_SPACE_OR_EXIT(buf+ret,
-						(data->write_ptr_2->length), 4);
-					/*Copy the actual data being passed*/
-					COPY_USER_SPACE_OR_EXIT(buf+ret,
-						*(data->buf_in_2),
-						data->write_ptr_2->length);
-					data->in_busy_2 = 0;
-				}
 			}
 		}
 #ifdef CONFIG_DIAG_SDIO_PIPE
@@ -1399,12 +1387,6 @@ exit:
 				&driver->smd_data[i].nrt_lock);
 	}
 	mutex_unlock(&driver->diagchar_mutex);
-
-#ifdef CONFIG_USB_G_LGE_ANDROID_DIAG_OSP_SUPPORT
-	driver->diag_read_status = 1;
-	wake_up_interruptible(&driver->diag_read_wait_q);
-#endif
-
 	return ret;
 }
 
@@ -1413,17 +1395,6 @@ static int diagchar_write(struct file *file, const char __user *buf,
 {
 	int err, ret = 0, pkt_type, token_offset = 0;
 	int remote_proc = 0, index;
-
-//2013-03-06 seongmook.yim(seongmook.yim@lge.com) [P6/MDMBSP] ADD LGODL [START]
-#ifdef CONFIG_LGE_DM_DEV
-	char *buf_dev;
-#endif /*CONFIG_LGE_DM_DEV*/
-//2013-03-06 seongmook.yim(seongmook.yim@lge.com) [P6/MDMBSP] ADD LGODL [END]
-
-#ifdef CONFIG_LGE_DM_APP
-	char *buf_cmp;
-#endif
-
 #ifdef DIAG_DEBUG
 	int length = 0, i;
 #endif
@@ -1456,26 +1427,6 @@ static int diagchar_write(struct file *file, const char __user *buf,
 		return -EIO;
 	}
 #endif /* DIAG over USB */
-
-#ifdef CONFIG_LGE_DM_APP
-	if (driver->logging_mode == DM_APP_MODE) {
-		/* only diag cmd #250 for supporting testmode tool */
-		buf_cmp = (char *)buf + 4;
-		if (*(buf_cmp) != 0xFA)
-			return 0;
-	}
-#endif
-
-//2013-03-06 seongmook.yim(seongmook.yim@lge.com) [P6/MDMBSP] ADD LGODL [START]
-#ifdef CONFIG_LGE_DM_DEV
-	if (driver->logging_mode == DM_DEV_MODE) {
-		/* only diag cmd #250 for supporting testmode tool */
-		buf_dev = (char *)buf + 4;
-		if (*(buf_dev) != 0xFA)
-			return 0;
-	}
-#endif
-//2013-03-06 seongmook.yim(seongmook.yim@lge.com) [P6/MDMBSP] ADD LGODL [END]
 	if (pkt_type == DCI_DATA_TYPE) {
 		user_space_data = diagmem_alloc(driver, payload_size,
 								POOL_TYPE_USER);
@@ -1486,7 +1437,6 @@ static int diagchar_write(struct file *file, const char __user *buf,
 		err = copy_from_user(user_space_data, buf + 4, payload_size);
 		if (err) {
 			pr_alert("diag: copy failed for DCI data\n");
-			diagmem_free(driver, user_space_data, POOL_TYPE_USER);
 			return DIAG_DCI_SEND_DATA_FAIL;
 		}
 		err = diag_process_dci_transaction(user_space_data,
@@ -2042,102 +1992,6 @@ void diagfwd_bridge_fn(int type)
 inline void diagfwd_bridge_fn(int type) { }
 #endif
 
-#ifdef CONFIG_LGE_DIAG_USB_ACCESS_LOCK
-int user_diag_enable;
-#ifdef CONFIG_LGE_DIAG_ENABLE_SYSFS
-
-#if defined(CONFIG_MACH_MSM8974_G2_DCM) || defined(CONFIG_MACH_MSM8974_G2_KDDI) || defined(CONFIG_MACH_MSM8974_Z_KDDI)
-#define DIAG_ENABLE	1
-#define DIAG_DISABLE	0
-#endif /* CONFIG_MACH_MSM8974_G2_DCM */
-static ssize_t read_diag_enable(struct device *dev, struct device_attribute *attr,
-				   char *buf)
-{
-	int ret;
-	
-	ret = sprintf(buf, "%d", user_diag_enable);
-
-	return ret;
-}
-static ssize_t write_diag_enable(struct device *dev,
-				    struct device_attribute *attr,
-				    const char *buf, size_t size)
-{
-    unsigned char string[2];
-  
-    sscanf(buf, "%s", string);
-	
-    if (!strncmp(string, "0", 1))
-    {
-    	user_diag_enable = 0;
-    }
-	else
-	{
-		user_diag_enable = 1;
-	}
-#if defined(CONFIG_MACH_MSM8974_G2_DCM) || defined(CONFIG_MACH_MSM8974_G2_KDDI) || defined(CONFIG_MACH_MSM8974_Z_KDDI)
-	if(lge_get_factory_boot()) {
-		printk("[FACTORY] force to diag enable, factory mode\n");
-		user_diag_enable = DIAG_ENABLE;
-	}
-#endif /* CONFIG_MACH_MSM8974_G2_DCM */
-
-	printk("[%s] diag_enable: %d\n",__func__, user_diag_enable);
-
-	return size;
-}
-static DEVICE_ATTR(diag_enable, S_IRUGO | S_IWUSR, read_diag_enable, write_diag_enable);
-int lg_diag_create_file(struct platform_device *pdev)
-{
-    int ret;
-
-	ret = device_create_file(&pdev->dev, &dev_attr_diag_enable);
-	if (ret) {
-		device_remove_file(&pdev->dev, &dev_attr_diag_enable);
-		return ret;
-	}
-    return ret;
-}
-
-#if defined(CONFIG_MACH_MSM8974_G2_DCM) || defined(CONFIG_MACH_MSM8974_G2_KDDI) || defined(CONFIG_MACH_MSM8974_Z_KDDI)
-int get_diag_enable(void)
-{
-	return user_diag_enable;
-}
-EXPORT_SYMBOL(get_diag_enable);
-#endif /* CONFIG_MACH_MSM8974_G2_DCM */
-
-int lg_diag_remove_file(struct platform_device *pdev)
-{
-	device_remove_file(&pdev->dev, &dev_attr_diag_enable);
-    return 0;
-}
-
-static int lg_diag_cmd_probe(struct platform_device *pdev)
-{
-	int ret;
-	ret = lg_diag_create_file(pdev);
-
-	return ret;
-}
-
-static int lg_diag_cmd_remove(struct platform_device *pdev)
-{
-	lg_diag_remove_file(pdev);
-
-	return 0;
-}
-
-static struct platform_driver lg_diag_cmd_driver = {
-	.probe		= lg_diag_cmd_probe,
-	.remove 	= lg_diag_cmd_remove,
-	.driver 	= {
-		.name = "lg_diag_cmd",
-		.owner	= THIS_MODULE,
-	},
-};
-#endif
-#endif
 static int __init diagchar_init(void)
 {
 	dev_t dev;
@@ -2228,10 +2082,6 @@ static int __init diagchar_init(void)
 	}
 
 	pr_info("diagchar initialized now");
-	
-#ifdef CONFIG_LGE_DIAG_ENABLE_SYSFS
-	platform_driver_register(&lg_diag_cmd_driver);
-#endif 
 	return 0;
 
 fail:
