@@ -557,6 +557,11 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 				switch (retval) {
 				default:
 					DBG(dev, "tx queue err %d\n", retval);
+					new_req->length = 0;
+					spin_lock(&dev->req_lock);
+					list_add_tail(&new_req->list,
+							&dev->tx_reqs);
+					spin_unlock(&dev->req_lock);
 					break;
 				case 0:
 					spin_lock(&dev->req_lock);
@@ -566,7 +571,13 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 				}
 			} else {
 				spin_lock(&dev->req_lock);
-				list_add(&new_req->list, &dev->tx_reqs);
+				/*
+				 * Put the idle request at the back of the
+				 * queue. The xmit function will put the
+				 * unfinished request at the beginning of the
+				 * queue.
+				 */
+				list_add_tail(&new_req->list, &dev->tx_reqs);
 				spin_unlock(&dev->req_lock);
 			}
 		} else {
@@ -787,6 +798,8 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	if (retval) {
 		if (!multi_pkt_xfer)
 			dev_kfree_skb_any(skb);
+		else
+			req->length = 0;
 drop:
 		dev->net->stats.tx_dropped++;
 		spin_lock_irqsave(&dev->req_lock, flags);
@@ -861,10 +874,7 @@ static int eth_stop(struct net_device *net)
 		 * their own pace; the network stack can handle old packets.
 		 * For the moment we leave this here, since it works.
 		 */
-#ifdef CONFIG_USB_G_LGE_ANDROID_AUTORUN_VZW
-#else
 		usb_ep_disable(link->in_ep);
-#endif
 		usb_ep_disable(link->out_ep);
 		if (netif_carrier_ok(net)) {
 			if (config_ep_by_speed(dev->gadget, &link->func,
@@ -887,9 +897,6 @@ static int eth_stop(struct net_device *net)
 
 /*-------------------------------------------------------------------------*/
 
-#ifdef CONFIG_USB_G_LGE_ANDROID
-static u8 host_ethaddr[ETH_ALEN];
-#endif
 /* initial value, changed by "ifconfig usb0 hw ether xx:xx:xx:xx:xx:xx" */
 static char *dev_addr;
 module_param(dev_addr, charp, S_IRUGO);
@@ -920,18 +927,7 @@ static int get_ether_addr(const char *str, u8 *dev_addr)
 	random_ether_addr(dev_addr);
 	return 1;
 }
-#ifdef CONFIG_USB_G_LGE_ANDROID
-static int get_host_ether_addr(u8 *str, u8 *dev_addr)
-{
-	memcpy(dev_addr, str, ETH_ALEN);
-	if (is_valid_ether_addr(dev_addr))
-		return 0;
 
-	random_ether_addr(dev_addr);
-	memcpy(str, dev_addr, ETH_ALEN);
-	return 1;
-}
-#endif
 static struct eth_dev *the_dev;
 
 static const struct net_device_ops eth_netdev_ops = {
@@ -1010,18 +1006,9 @@ int gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 	if (get_ether_addr(dev_addr, net->dev_addr))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "self");
-#ifdef CONFIG_USB_G_LGE_ANDROID
-	if (get_host_ether_addr(host_ethaddr, dev->host_mac))
-		dev_warn(&g->dev,
-			"using random %s ethernet address\n", "host");
-	else
-		dev_warn(&g->dev,
-			"using previous %s ethernet address\n", "host");
-#else /* below is original */
 	if (get_ether_addr(host_addr, dev->host_mac))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "host");
-#endif
 
 	if (ethaddr)
 		memcpy(ethaddr, dev->host_mac, ETH_ALEN);
