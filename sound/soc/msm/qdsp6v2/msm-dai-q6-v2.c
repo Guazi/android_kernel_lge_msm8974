@@ -102,20 +102,11 @@ static const struct soc_enum mi2s_config_enum[] = {
 	SOC_ENUM_SINGLE_EXT(4, mi2s_format),
 };
 
-/* LGE_CHANGE_S - QCT patch (case #01013176)
-*  add "aux_tx, aux_rx" to prevent unexpected close of AUX-AFE and clock disable
-*  2012-11-10, donggyun.kim@lge.com
-*/
-static int aux_tx;
-static int aux_rx;
-/* LGE_CHANGE_E */
-
 static int msm_dai_q6_auxpcm_hw_params(
 				struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params,
 				struct snd_soc_dai *dai)
 {
-
 	struct msm_dai_q6_auxpcm_dai_data *aux_dai_data =
 			dev_get_drvdata(dai->dev);
 	struct msm_dai_q6_dai_data *dai_data = &aux_dai_data->bdai_data;
@@ -205,30 +196,11 @@ static void msm_dai_q6_auxpcm_shutdown(struct snd_pcm_substream *substream,
 		dev_get_drvdata(dai->dev);
 
 	mutex_lock(&aux_dai_data->rlock);
-	/* LGE_CHANGE_S - QCT patch (case #01013176)
-	*  add "aux_tx, aux_rx" to prevent unexpected close of AUX-AFE and clock disable
-	*  2012-11-10, donggyun.kim@lge.com
-	*/
-	if (dai->id == AFE_PORT_ID_SECONDARY_PCM_RX)
-		aux_rx--;
-	else if (dai->id == AFE_PORT_ID_SECONDARY_PCM_TX)
-		aux_tx--;
-
-	if (aux_rx < 0) {
-		aux_rx = 0;
-		goto exit;
-	} else if (aux_tx < 0) {
-		aux_tx = 0;
-		goto exit;	
-	}
-	/* LGE_CHANGE_E */
-
 
 	if (!(test_bit(STATUS_TX_PORT, aux_dai_data->auxpcm_port_status) ||
 	      test_bit(STATUS_RX_PORT, aux_dai_data->auxpcm_port_status))) {
 		dev_dbg(dai->dev, "%s(): dai->id %d PCM ports already closed\n",
 				__func__, dai->id);
-
 		goto exit;
 	}
 
@@ -256,7 +228,7 @@ static void msm_dai_q6_auxpcm_shutdown(struct snd_pcm_substream *substream,
 		dev_dbg(dai->dev, "%s(): cannot shutdown PCM ports\n",
 			__func__);
 		goto exit;
- 	}
+	}
 
 	dev_dbg(dai->dev, "%s: dai->id = %d closing PCM AFE ports\n",
 			__func__, dai->id);
@@ -274,14 +246,6 @@ static void msm_dai_q6_auxpcm_shutdown(struct snd_pcm_substream *substream,
 	lpass_pcm_src_clk->clk_val1 = 0;
 	afe_set_lpass_clock(aux_dai_data->rx_pid, lpass_pcm_src_clk);
 	afe_set_lpass_clock(aux_dai_data->tx_pid, lpass_pcm_src_clk);
-
-	/* LGE_CHANGE_S - QCT patch (case #01013176)
-	*  add "aux_tx, aux_rx" to prevent unexpected close of AUX-AFE and clock disable
-	*  2012-11-10, donggyun.kim@lge.com
-	*/
-	aux_rx = 0;
-	aux_tx = 0;
-	/* LGE_CHANGE_E */
 
 exit:
 	mutex_unlock(&aux_dai_data->rlock);
@@ -303,18 +267,10 @@ static int msm_dai_q6_auxpcm_prepare(struct snd_pcm_substream *substream,
 	lpass_pcm_src_clk = (struct afe_clk_cfg *) &aux_dai_data->clk_cfg;
 
 	mutex_lock(&aux_dai_data->rlock);
-	/* LGE_CHANGE_S - QCT patch (case #01013176)
-	*  add "aux_tx, aux_rx" to prevent unexpected close of AUX-AFE and clock disable
-	*  2012-11-10, donggyun.kim@lge.com
-	*/
-	if (dai->id == AFE_PORT_ID_SECONDARY_PCM_RX)
-		aux_rx++;
-	else if (dai->id == AFE_PORT_ID_SECONDARY_PCM_TX)
-		aux_tx++;
-	/* LGE_CHANGE_E */
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-		if (test_bit(STATUS_TX_PORT, aux_dai_data->auxpcm_port_status)) {
+		if (test_bit(STATUS_TX_PORT,
+				aux_dai_data->auxpcm_port_status)) {
 			dev_dbg(dai->dev, "%s(): PCM_TX port already ON\n",
 				__func__);
 			goto exit;
@@ -322,7 +278,8 @@ static int msm_dai_q6_auxpcm_prepare(struct snd_pcm_substream *substream,
 			set_bit(STATUS_TX_PORT,
 				  aux_dai_data->auxpcm_port_status);
 	} else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		if (test_bit(STATUS_RX_PORT, aux_dai_data->auxpcm_port_status)) {
+		if (test_bit(STATUS_RX_PORT,
+				aux_dai_data->auxpcm_port_status)) {
 			dev_dbg(dai->dev, "%s(): PCM_RX port already ON\n",
 				__func__);
 			goto exit;
@@ -338,10 +295,13 @@ static int msm_dai_q6_auxpcm_prepare(struct snd_pcm_substream *substream,
 
 	dev_dbg(dai->dev, "%s: dai->id:%d  opening afe ports\n",
 			__func__, dai->id);
+
+	rc = afe_q6_interface_prepare();
 	if (IS_ERR_VALUE(rc)) {
 		dev_err(dai->dev, "fail to open AFE APR\n");
 		goto fail;
 	}
+
 	/*
 	 * For AUX PCM Interface the below sequence of clk
 	 * settings and afe_open is a strict requirement.
@@ -373,7 +333,7 @@ static int msm_dai_q6_auxpcm_prepare(struct snd_pcm_substream *substream,
 	if (rc < 0) {
 		dev_err(dai->dev,
 			"%s:afe_set_lpass_clock on RX pcm_src_clk failed\n",
-							__func__);
+			__func__);
 		goto fail;
 	}
 
@@ -381,23 +341,24 @@ static int msm_dai_q6_auxpcm_prepare(struct snd_pcm_substream *substream,
 	if (rc < 0) {
 		dev_err(dai->dev,
 			"%s:afe_set_lpass_clock on TX pcm_src_clk failed\n",
-							__func__);
+			__func__);
 		goto fail;
 	}
 
 	afe_open(aux_dai_data->rx_pid, &dai_data->port_config, dai_data->rate);
 	afe_open(aux_dai_data->tx_pid, &dai_data->port_config, dai_data->rate);
 	goto exit;
- 
- fail:
+
+fail:
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		clear_bit(STATUS_TX_PORT, aux_dai_data->auxpcm_port_status);
 	else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		clear_bit(STATUS_RX_PORT, aux_dai_data->auxpcm_port_status);
+
 exit:
 	mutex_unlock(&aux_dai_data->rlock);
 	return rc;
- }
+}
 
 static int msm_dai_q6_auxpcm_trigger(struct snd_pcm_substream *substream,
 		int cmd, struct snd_soc_dai *dai)
@@ -437,15 +398,15 @@ static int msm_dai_q6_dai_auxpcm_remove(struct snd_soc_dai *dai)
 	aux_dai_data = dev_get_drvdata(dai->dev);
 
 	dev_dbg(dai->dev, "%s(): dai->id %d closing afe\n",
-					__func__, dai->id);
+		__func__, dai->id);
 
 	if (test_bit(STATUS_TX_PORT, aux_dai_data->auxpcm_port_status) ||
 	    test_bit(STATUS_RX_PORT, aux_dai_data->auxpcm_port_status)) {
 		rc = afe_close(aux_dai_data->rx_pid); /* can block */
-	if (IS_ERR_VALUE(rc))
+		if (IS_ERR_VALUE(rc))
 			dev_err(dai->dev, "fail to close AUXPCM RX AFE port\n");
 		rc = afe_close(aux_dai_data->tx_pid);
-	if (IS_ERR_VALUE(rc))
+		if (IS_ERR_VALUE(rc))
 			dev_err(dai->dev, "fail to close AUXPCM TX AFE port\n");
 		clear_bit(STATUS_TX_PORT, aux_dai_data->auxpcm_port_status);
 		clear_bit(STATUS_RX_PORT, aux_dai_data->auxpcm_port_status);
@@ -760,6 +721,7 @@ static int msm_dai_q6_hw_params(struct snd_pcm_substream *substream,
 		rc = msm_dai_q6_afe_rtproxy_hw_params(params, dai);
 		break;
 	case VOICE_PLAYBACK_TX:
+	case VOICE2_PLAYBACK_TX:
 	case VOICE_RECORD_RX:
 	case VOICE_RECORD_TX:
 		rc = msm_dai_q6_psuedo_port_hw_params(params,
@@ -2076,6 +2038,7 @@ static int msm_dai_q6_dev_probe(struct platform_device *pdev)
 		rc = snd_soc_register_dai(&pdev->dev, &msm_dai_q6_afe_tx_dai);
 		break;
 	case VOICE_PLAYBACK_TX:
+	case VOICE2_PLAYBACK_TX:
 		rc = snd_soc_register_dai(&pdev->dev,
 					&msm_dai_q6_voice_playback_tx_dai);
 		break;

@@ -101,6 +101,7 @@ static struct audio_client common_client;
 static int set_custom_topology;
 static int topology_map_handle;
 
+
 int q6asm_mmap_apr_dereg(void)
 {
 	int c;
@@ -441,16 +442,15 @@ done:
 int q6asm_unmap_cal_blocks(void)
 {
 	int				result = 0;
-	struct acdb_cal_block		cal_block;
 
 	if (topology_map_handle == 0)
 		goto done;
 
-	get_asm_custom_topology(&cal_block);
-
-	if (q6asm_mmap_apr_reg() == NULL)
+	if (q6asm_mmap_apr_reg() == NULL) {
 		pr_err("%s: q6asm_mmap_apr_reg failed, err %d\n",
 			__func__, result);
+		goto done;
+	}
 
 	result = q6asm_memory_unmap_regions(&common_client, IN);
 	if (result < 0)
@@ -463,11 +463,11 @@ int q6asm_unmap_cal_blocks(void)
 			__func__, result);
 
 	topology_map_handle = 0;
+	set_custom_topology = 0;
 
 done:
 	return result;
 }
-
 
 int q6asm_audio_client_buf_free(unsigned int dir,
 			struct audio_client *ac)
@@ -572,6 +572,7 @@ void q6asm_audio_client_free(struct audio_client *ac)
 	}
 
 	apr_deregister(ac->apr);
+	ac->apr = NULL;
 	ac->mmap_apr = NULL;
 	q6asm_session_free(ac);
 	q6asm_mmap_apr_dereg();
@@ -580,6 +581,7 @@ void q6asm_audio_client_free(struct audio_client *ac)
 
 /*done:*/
 	kfree(ac);
+	ac = NULL;
 	return;
 }
 
@@ -695,7 +697,6 @@ struct audio_client *q6asm_get_audio_client(int session_id)
 	if (session_id == ASM_CONTROL_SESSION) {
 		return &common_client;
 	}
-
 
 	if ((session_id <= 0) || (session_id > SESSION_MAX)) {
 		pr_err("%s: invalid session: %d\n", __func__, session_id);
@@ -1391,6 +1392,10 @@ static void q6asm_add_hdr_async(struct audio_client *ac, struct apr_hdr *hdr,
 	hdr->hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD, \
 				APR_HDR_LEN(sizeof(struct apr_hdr)),\
 				APR_PKT_VER);
+	if (ac->apr == NULL) {
+		pr_err("%s: error ac->apr is NULL", __func__);
+		return;
+	}
 	hdr->src_svc = ((struct apr_svc *)ac->apr)->id;
 	hdr->src_domain = APR_DOMAIN_APPS;
 	hdr->dest_svc = APR_SVC_ASM;
@@ -1983,12 +1988,12 @@ static int q6asm_map_channels(u8 *channel_mapping, uint32_t channels)
 		lchannel_mapping[3] = PCM_CHANNEL_LB;
 		lchannel_mapping[4] = PCM_CHANNEL_RB;
 	} else if (channels == 6) {
-		lchannel_mapping[0] = PCM_CHANNEL_FC;
-		lchannel_mapping[1] = PCM_CHANNEL_FL;
-		lchannel_mapping[2] = PCM_CHANNEL_FR;
-		lchannel_mapping[3] = PCM_CHANNEL_LB;
-		lchannel_mapping[4] = PCM_CHANNEL_RB;
-		lchannel_mapping[5] = PCM_CHANNEL_LFE;
+		lchannel_mapping[0] = PCM_CHANNEL_FL;
+		lchannel_mapping[1] = PCM_CHANNEL_FR;
+		lchannel_mapping[2] = PCM_CHANNEL_LFE;
+		lchannel_mapping[3] = PCM_CHANNEL_FC;
+		lchannel_mapping[4] = PCM_CHANNEL_LB;
+		lchannel_mapping[5] = PCM_CHANNEL_RB;
 	} else if (channels == 8) {
 		lchannel_mapping[0] = PCM_CHANNEL_FL;
 		lchannel_mapping[1] = PCM_CHANNEL_FR;
@@ -2923,6 +2928,12 @@ int q6asm_set_lrgain(struct audio_client *ac, int left_gain, int right_gain)
 	int sz = 0;
 	int rc  = 0;
 
+	if (ac == NULL) {
+		pr_err("%s: ac is NULL\n", __func__);
+		rc = -EINVAL;
+		goto fail_cmd;
+	}
+
 	sz = sizeof(struct asm_volume_ctrl_lr_chan_gain);
 	q6asm_add_hdr_async(ac, &lrgain.hdr, sz, TRUE);
 	lrgain.hdr.opcode = ASM_STREAM_CMD_SET_PP_PARAMS_V2;
@@ -3005,6 +3016,12 @@ int q6asm_set_volume(struct audio_client *ac, int volume)
 	struct asm_volume_ctrl_master_gain vol;
 	int sz = 0;
 	int rc  = 0;
+
+	if (ac == NULL) {
+		pr_err("%s: ac is NULL\n", __func__);
+		rc = -EINVAL;
+		goto fail_cmd;
+	}
 
 	sz = sizeof(struct asm_volume_ctrl_master_gain);
 	q6asm_add_hdr_async(ac, &vol.hdr, sz, TRUE);
@@ -3368,7 +3385,7 @@ int q6asm_async_write(struct audio_client *ac,
 	if (ac->io_mode == liomode)
 		lbuf_addr_lsw = (write.buf_addr_lsw - 32);
 	else if (ac->io_mode == io_compressed)
-		lbuf_addr_lsw = (write.buf_addr_lsw - 0x40);
+		lbuf_addr_lsw = (write.buf_addr_lsw - param->metadata_len);
 	else
 		lbuf_addr_lsw = write.buf_addr_lsw;
 
@@ -3833,8 +3850,8 @@ static int __init q6asm_init(void)
 	pr_debug("%s\n", __func__);
 	memset(session, 0, sizeof(session));
 	set_custom_topology = 1;
-	common_client.port[0].buf = &common_buf;
 
+	common_client.port[0].buf = &common_buf;
 
 	config_debug_fs_init();
 

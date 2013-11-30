@@ -173,41 +173,53 @@ static struct snd_pcm_hardware msm_pcm_hardware = {
 
 
 static int msm_voip_mute_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
+			     struct snd_ctl_elem_value *ucontrol)
 {
+	int ret = 0;
 	int mute = ucontrol->value.integer.value[0];
+	int ramp_duration = ucontrol->value.integer.value[1];
 
-	pr_debug("%s: mute=%d\n", __func__, mute);
+	if ((mute < 0) || (mute > 1) || (ramp_duration < 0)) {
+		pr_err(" %s Invalid arguments", __func__);
 
-	voc_set_tx_mute(voc_get_session_id(VOIP_SESSION_NAME), TX_PATH, mute);
+		ret = -EINVAL;
+		goto done;
+	}
 
-	return 0;
+	pr_debug("%s: mute=%d ramp_duration=%d\n", __func__, mute,
+		ramp_duration);
+
+	voc_set_tx_mute(voc_get_session_id(VOIP_SESSION_NAME), TX_PATH, mute,
+					ramp_duration);
+
+done:
+	return ret;
 }
 
-static int msm_voip_mute_get(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
+static int msm_voip_gain_put(struct snd_kcontrol *kcontrol,
+			     struct snd_ctl_elem_value *ucontrol)
 {
-	ucontrol->value.integer.value[0] = 0;
-	return 0;
-}
-
-static int msm_voip_volume_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
+	int ret = 0;
 	int volume = ucontrol->value.integer.value[0];
+	int ramp_duration = ucontrol->value.integer.value[1];
 
-	pr_debug("%s: volume: %d\n", __func__, volume);
+	if ((volume < 0) || (ramp_duration < 0)) {
+		pr_err(" %s Invalid arguments", __func__);
 
-	voc_set_rx_vol_index(voc_get_session_id(VOIP_SESSION_NAME),
-			     RX_PATH,
-			     volume);
-	return 0;
-}
-static int msm_voip_volume_get(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	ucontrol->value.integer.value[0] = 0;
-	return 0;
+		ret = -EINVAL;
+		goto done;
+	}
+
+	pr_debug("%s: volume: %d ramp_duration: %d\n", __func__, volume,
+		ramp_duration);
+
+	voc_set_rx_vol_step(voc_get_session_id(VOIP_SESSION_NAME),
+						RX_PATH,
+						volume,
+						ramp_duration);
+
+done:
+	return ret;
 }
 
 static int msm_voip_dtx_mode_put(struct snd_kcontrol *kcontrol,
@@ -236,19 +248,17 @@ static int msm_voip_dtx_mode_get(struct snd_kcontrol *kcontrol,
 }
 
 static struct snd_kcontrol_new msm_voip_controls[] = {
-	SOC_SINGLE_EXT("Voip Tx Mute", SND_SOC_NOPM, 0, 1, 0,
-				msm_voip_mute_get, msm_voip_mute_put),
-#if defined(CONFIG_SND_VOIP_VOLUME)
-	SOC_SINGLE_EXT("Voip Rx Volume", SND_SOC_NOPM, 0, CONFIG_SND_VOIP_VOLUME, 0,
-#else
-	SOC_SINGLE_EXT("Voip Rx Volume", SND_SOC_NOPM, 0, 9, 0,
-#endif
-				msm_voip_volume_get, msm_voip_volume_put),
+	SOC_SINGLE_MULTI_EXT("Voip Tx Mute", SND_SOC_NOPM, 0,
+			     MAX_RAMP_DURATION,
+			     0, 2, NULL, msm_voip_mute_put),
+	SOC_SINGLE_MULTI_EXT("Voip Rx Gain", SND_SOC_NOPM, 0,
+			     MAX_RAMP_DURATION,
+			     0, 2, NULL, msm_voip_gain_put),
 	SOC_SINGLE_MULTI_EXT("Voip Mode Rate Config", SND_SOC_NOPM, 0, 23850,
-				0, 2, msm_voip_mode_rate_config_get,
-				msm_voip_mode_rate_config_put),
+			     0, 2, msm_voip_mode_rate_config_get,
+			     msm_voip_mode_rate_config_put),
 	SOC_SINGLE_EXT("Voip Dtx Mode", SND_SOC_NOPM, 0, 1, 0,
-				msm_voip_dtx_mode_get, msm_voip_dtx_mode_put),
+		       msm_voip_dtx_mode_get, msm_voip_dtx_mode_put),
 };
 
 static int msm_pcm_voip_probe(struct snd_soc_platform *platform)
@@ -821,8 +831,15 @@ static int msm_pcm_prepare(struct snd_pcm_substream *substream)
 		}
 		voc_register_mvs_cb(voip_process_ul_pkt,
 					voip_process_dl_pkt, prtd);
-		voc_start_voice_call(voc_get_session_id(VOIP_SESSION_NAME));
+		ret = voc_start_voice_call(
+				voc_get_session_id(VOIP_SESSION_NAME));
 
+		if (ret < 0) {
+			pr_err("%s: voc_start_voice_call() failed err %d",
+			       __func__, ret);
+
+			goto done;
+		}
 		prtd->state = VOIP_STARTED;
 	}
 done:
@@ -1136,12 +1153,42 @@ static struct snd_soc_platform_driver msm_soc_platform = {
 
 static __devinit int msm_pcm_probe(struct platform_device *pdev)
 {
+	int rc;
+
+	if (!is_voc_initialized()) {
+		pr_debug("%s: voice module not initialized yet, deferring probe()\n",
+		       __func__);
+
+		rc = -EPROBE_DEFER;
+		goto done;
+	}
+
+	rc = voc_alloc_cal_shared_memory();
+	if (rc == -EPROBE_DEFER) {
+		pr_debug("%s: memory allocation for calibration deferred %d\n",
+			 __func__, rc);
+
+		goto done;
+	} else if (rc < 0) {
+		pr_err("%s: memory allocation for calibration failed %d\n",
+		       __func__, rc);
+	}
+
+	rc = voc_alloc_voip_shared_memory();
+	if (rc < 0) {
+		pr_err("%s: error allocating shared mem err %d\n",
+		       __func__, rc);
+	}
+
 	if (pdev->dev.of_node)
 		dev_set_name(&pdev->dev, "%s", "msm-voip-dsp");
 
 	pr_debug("%s: dev name %s\n", __func__, dev_name(&pdev->dev));
-	return snd_soc_register_platform(&pdev->dev,
-				   &msm_soc_platform);
+	rc = snd_soc_register_platform(&pdev->dev,
+				       &msm_soc_platform);
+
+done:
+	return rc;
 }
 
 static int msm_pcm_remove(struct platform_device *pdev)
