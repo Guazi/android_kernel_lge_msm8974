@@ -36,6 +36,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
@@ -50,14 +51,16 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/otg.h>
-#if defined CONFIG_USB_G_LGE_ANDROID_PFSC && defined CONFIG_LGE_PM
-#include <mach/board_lge.h>
-#endif
 
 #include "core.h"
 #include "gadget.h"
 #include "debug.h"
 #include "io.h"
+
+static bool tx_fifo_resize_enable;
+module_param(tx_fifo_resize_enable, bool, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(tx_fifo_resize_enable,
+			"Enable allocating Tx fifo for endpoints");
 
 /**
  * dwc3_gadget_set_test_mode - Enables USB2 Test Modes
@@ -181,7 +184,7 @@ int dwc3_gadget_resize_tx_fifos(struct dwc3 *dwc)
 	int		mdwidth;
 	int		num;
 
-	if (!dwc->needs_fifo_resize)
+	if (!dwc->needs_fifo_resize && !tx_fifo_resize_enable)
 		return 0;
 
 	ram1_depth = DWC3_RAM1_DEPTH(dwc->hwparams.hwparams7);
@@ -212,7 +215,7 @@ int dwc3_gadget_resize_tx_fifos(struct dwc3 *dwc)
 		if (((dep->endpoint.maxburst > 1) &&
 				usb_endpoint_xfer_bulk(dep->endpoint.desc))
 				|| usb_endpoint_xfer_isoc(dep->endpoint.desc))
-			mult = 8; //3
+			mult = 3;
 
 		/*
 		 * REVISIT: the following assumes we will always have enough
@@ -1488,9 +1491,9 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on)
 {
 	u32			reg;
 	u32			timeout = 500;
-#if defined CONFIG_USB_G_LGE_ANDROID_PFSC && defined CONFIG_LGE_PM
-	enum lge_boot_mode_type boot_mode;
-#endif
+	unsigned long		csr_timeout;
+	struct dwc3_event_buffer	*evt;
+	int				n;
 
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	if (is_on) {
@@ -1501,6 +1504,41 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on)
 
 		if (dwc->revision >= DWC3_REVISION_194A)
 			reg &= ~DWC3_DCTL_KEEP_CONNECT;
+
+		/* issue device SoftReset */
+		csr_timeout = jiffies + msecs_to_jiffies(500);
+		dwc3_writel(dwc->regs, DWC3_DCTL, reg | DWC3_DCTL_CSFTRST);
+		do {
+			reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+			if (!(reg & DWC3_DCTL_CSFTRST))
+				break;
+
+			if (time_after(jiffies, csr_timeout))
+				dev_err(dwc->dev, "Reset Timed Out\n");
+
+			cpu_relax();
+		} while (true);
+
+
+		for (n = 0; n < dwc->num_event_buffers; n++) {
+			evt = dwc->ev_buffs[n];
+			dev_dbg(dwc->dev, "Event buf %p dma %08llx length %d\n",
+				evt->buf, (unsigned long long) evt->dma,
+				evt->length);
+
+			evt->lpos = 0;
+
+			dwc3_writel(dwc->regs, DWC3_GEVNTADRLO(n),
+					lower_32_bits(evt->dma));
+			dwc3_writel(dwc->regs, DWC3_GEVNTADRHI(n),
+					upper_32_bits(evt->dma));
+			dwc3_writel(dwc->regs, DWC3_GEVNTSIZ(n),
+					(evt->length - 8) & 0xffff);
+			dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT(n), 0);
+		}
+
+		dwc3_gadget_restart(dwc);
+		reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 		reg |= DWC3_DCTL_RUN_STOP;
 	} else {
 		reg &= ~DWC3_DCTL_RUN_STOP;
@@ -1523,18 +1561,6 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on)
 		udelay(1);
 	} while (1);
 
-#if defined CONFIG_USB_G_LGE_ANDROID_PFSC && defined CONFIG_LGE_PM
-	boot_mode = lge_get_boot_mode();
-	if ((boot_mode == LGE_BOOT_MODE_FACTORY ||
-		boot_mode == LGE_BOOT_MODE_PIFBOOT ||
-		boot_mode == LGE_BOOT_MODE_MINIOS ||
-		lge_pm_get_cable_type() == CABLE_130K) && is_on) {
-		reg = dwc3_readl(dwc->regs, DWC3_DCFG);
-		reg &= ~(DWC3_DCFG_SPEED_MASK);
-		reg |= DWC3_DCFG_FULLSPEED2;
-		dwc3_writel(dwc->regs, DWC3_DCFG, reg);
-	}
-#endif
 	dev_vdbg(dwc->dev, "gadget %s data soft-%s\n",
 			dwc->gadget_driver
 			? dwc->gadget_driver->function : "no-function",
@@ -2284,9 +2310,7 @@ static void dwc3_gadget_usb2_phy_suspend(struct dwc3 *dwc, int suspend)
 static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 {
 	u32			reg;
-#ifndef CONFIG_LGE_PM
 	struct dwc3_otg		*dotg = dwc->dotg;
-#endif
 
 	dev_vdbg(dwc->dev, "%s\n", __func__);
 
@@ -2332,10 +2356,8 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 		dwc3_gadget_usb3_phy_suspend(dwc, false);
 	}
 
-#ifndef CONFIG_LGE_PM
 	if (dotg && dotg->otg.phy)
 		usb_phy_set_power(dotg->otg.phy, 0);
-#endif
 
 	if (dwc->gadget.speed != USB_SPEED_UNKNOWN)
 		dwc3_disconnect_gadget(dwc);
@@ -2679,9 +2701,6 @@ static irqreturn_t dwc3_process_event_buf(struct dwc3 *dwc, u32 buf)
 		left -= 4;
 
 		dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT(buf), 4);
-#ifdef CONFIG_USB_LGE_RELIABILITY
-        if (left <= 0) break;
-#endif
 	}
 
 	return IRQ_HANDLED;
@@ -2755,17 +2774,7 @@ int __devinit dwc3_gadget_init(struct dwc3 *dwc)
 	dev_set_name(&dwc->gadget.dev, "gadget");
 
 	dwc->gadget.ops			= &dwc3_gadget_ops;
-#if defined(CONFIG_MACH_MSM8974_G2_SPR)\
-	|| defined(CONFIG_MACH_MSM8974_G2_DCM)\
-	|| defined(CONFIG_MACH_MSM8974_G2_KDDI)\
-	|| defined(CONFIG_MACH_MSM8974_G2_OPEN_AME)\
-	|| defined(CONFIG_MACH_MSM8974_G2_OPEN_COM)\
-	|| defined(CONFIG_MACH_MSM8974_G2_TEL_AU)\
-	|| defined(CONFIG_MACH_MSM8974_VU3_KR)
-	dwc->gadget.max_speed		= USB_SPEED_HIGH;
-#else
 	dwc->gadget.max_speed		= USB_SPEED_SUPER;
-#endif
 	dwc->gadget.speed		= USB_SPEED_UNKNOWN;
 	dwc->gadget.dev.parent		= dwc->dev;
 	dwc->gadget.sg_supported	= true;
