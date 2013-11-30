@@ -26,14 +26,10 @@
 #define V4L2_IDENT_CCI 50005
 #define CCI_I2C_QUEUE_0_SIZE 64
 #define CCI_I2C_QUEUE_1_SIZE 16
+#define CYCLES_PER_MICRO_SEC 4915
+#define CCI_MAX_DELAY 10000
 
-/*LGE_CHANGE S, i2c timeout increase, 2013-05-23, youngbae.choi@lge.com */
-#if 1
-#define CCI_TIMEOUT msecs_to_jiffies(300) //timeout 300ms
-#else /* original */
-#define CCI_TIMEOUT msecs_to_jiffies(100)
-#endif
-/*LGE_CHANGE E, i2c timeout increase, 2013-05-23, youngbae.choi@lge.com */
+#define CCI_TIMEOUT msecs_to_jiffies(300)
 
 /* TODO move this somewhere else */
 #define MSM_CCI_DRV_NAME "msm_cci"
@@ -83,16 +79,9 @@ static int32_t msm_cci_i2c_config_sync_timer(struct v4l2_subdev *sd,
 	struct msm_camera_cci_ctrl *c_ctrl)
 {
 	struct cci_device *cci_dev;
-	enum cci_i2c_master_t master = c_ctrl->cci_info->cci_i2c_master;	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
 	cci_dev = v4l2_get_subdevdata(sd);
-
-	mutex_lock(&cci_dev->cci_master_info[master].mutex);	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
-
 	msm_camera_io_w(c_ctrl->cci_info->cid, cci_dev->base +
 		CCI_SET_CID_SYNC_TIMER_0_ADDR + (c_ctrl->cci_info->cid * 0x4));
-
-	mutex_unlock(&cci_dev->cci_master_info[master].mutex);	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
-
 	return 0;
 }
 
@@ -101,12 +90,8 @@ static int32_t msm_cci_i2c_set_freq(struct v4l2_subdev *sd,
 {
 	struct cci_device *cci_dev;
 	uint32_t val;
-	enum cci_i2c_master_t master = c_ctrl->cci_info->cci_i2c_master;	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
 	cci_dev = v4l2_get_subdevdata(sd);
 	val = c_ctrl->cci_info->freq;
-
-	mutex_lock(&cci_dev->cci_master_info[master].mutex);	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
-
 	msm_camera_io_w(val, cci_dev->base + CCI_I2C_M0_SCL_CTL_ADDR +
 		c_ctrl->cci_info->cci_i2c_master*0x100);
 	msm_camera_io_w(val, cci_dev->base + CCI_I2C_M0_SDA_CTL_0_ADDR +
@@ -117,9 +102,6 @@ static int32_t msm_cci_i2c_set_freq(struct v4l2_subdev *sd,
 		c_ctrl->cci_info->cci_i2c_master*0x100);
 	msm_camera_io_w(val, cci_dev->base + CCI_I2C_M0_MISC_CTL_ADDR +
 		c_ctrl->cci_info->cci_i2c_master*0x100);
-
-	mutex_unlock(&cci_dev->cci_master_info[master].mutex);	//LGE_CHANGE, fix for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
-
 	return 0;
 }
 
@@ -131,11 +113,6 @@ static void msm_cci_flush_queue(struct cci_device *cci_dev,
 	msm_camera_io_w(1 << master, cci_dev->base + CCI_HALT_REQ_ADDR);
 	rc = wait_for_completion_interruptible_timeout(
 		&cci_dev->cci_master_info[master].reset_complete, CCI_TIMEOUT);
-#if 0 // Quallcomm Org.
-	if (rc <= 0)
-		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
-			__func__, __LINE__);
-#else // Quallcomm patch for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
 	if (rc < 0) {
 		pr_err("%s:%d wait failed\n", __func__, __LINE__);
 	} else if (rc == 0) {
@@ -160,7 +137,6 @@ static void msm_cci_flush_queue(struct cci_device *cci_dev,
 			pr_err("%s:%d wait failed %d\n", __func__, __LINE__,
 				rc);
 	}
-#endif
 	return;
 }
 
@@ -197,17 +173,20 @@ static int32_t msm_cci_validate_queue(struct cci_device *cci_dev,
 			__func__, __LINE__);
 		rc = wait_for_completion_interruptible_timeout(&cci_dev->
 			cci_master_info[master].reset_complete, CCI_TIMEOUT);
-		if (rc <= 0) {
+		if (rc == -ERESTARTSYS) {
+			pr_err("%s:%d failed: rc %d", __func__, __LINE__, rc);
+		} else if (rc <= 0) {
 			pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
 				 __func__, __LINE__);
 			if (rc == 0)
 				rc = -ETIMEDOUT;
 			msm_cci_flush_queue(cci_dev, master);
 			return rc;
+		} else {
+			rc = cci_dev->cci_master_info[master].status;
+			if (rc < 0)
+				pr_err("%s failed rc %d\n", __func__, rc);
 		}
-		rc = cci_dev->cci_master_info[master].status;
-		if (rc < 0)
-			pr_err("%s failed rc %d\n", __func__, rc);
 	}
 	return rc;
 }
@@ -217,13 +196,13 @@ static int32_t msm_cci_data_queue(struct cci_device *cci_dev,
 {
 	uint16_t i = 0, j = 0, k = 0, h = 0, len = 0;
 	int32_t rc = 0;
-	uint32_t cmd = 0;
+	uint32_t cmd = 0, delay = 0;
 	uint8_t data[10];
 	uint16_t reg_addr = 0;
-	struct msm_camera_cci_i2c_write_cfg *i2c_msg =
+	struct msm_camera_i2c_reg_setting *i2c_msg =
 		&c_ctrl->cfg.cci_i2c_write_cfg;
 	uint16_t cmd_size = i2c_msg->size;
-	struct msm_camera_i2c_reg_conf *i2c_cmd = i2c_msg->reg_conf_tbl;
+	struct msm_camera_i2c_reg_array *i2c_cmd = i2c_msg->reg_setting;
 	enum cci_i2c_master_t master = c_ctrl->cci_info->cci_i2c_master;
 	CDBG("%s addr type %d data type %d\n", __func__,
 		i2c_msg->addr_type, i2c_msg->data_type);
@@ -231,6 +210,7 @@ static int32_t msm_cci_data_queue(struct cci_device *cci_dev,
 	while (cmd_size) {
 		CDBG("%s cmd_size %d addr 0x%x data 0x%x", __func__,
 			cmd_size, i2c_cmd->reg_addr, i2c_cmd->reg_data);
+		delay = i2c_cmd->delay;
 		data[i++] = CCI_I2C_WRITE_CMD;
 		if (i2c_cmd->reg_addr)
 			reg_addr = i2c_cmd->reg_addr;
@@ -269,6 +249,17 @@ static int32_t msm_cci_data_queue(struct cci_device *cci_dev,
 			cmd = 0;
 			for (j = 0; (j < 4 && k < i); j++)
 				cmd |= (data[k++] << (j * 8));
+			CDBG("%s CCI_I2C_M0_Q0_LOAD_DATA_ADDR 0x%x\n",
+				__func__, cmd);
+			msm_camera_io_w(cmd, cci_dev->base +
+				CCI_I2C_M0_Q0_LOAD_DATA_ADDR +
+				master * 0x200 + queue * 0x100);
+		}
+		if ((delay > 0) && (delay < CCI_MAX_DELAY)) {
+			cmd = (uint32_t)((delay * CYCLES_PER_MICRO_SEC) /
+				0x100);
+			cmd <<= 4;
+			cmd |= CCI_I2C_WAIT_CMD;
 			CDBG("%s CCI_I2C_M0_Q0_LOAD_DATA_ADDR 0x%x\n",
 				__func__, cmd);
 			msm_camera_io_w(cmd, cci_dev->base +
@@ -352,8 +343,7 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		CDBG("%s failed line %d\n", __func__, __LINE__);
 		goto ERROR;
 	}
-/*LGE_CHANGE S, i2c read bug fix confirmed by QCT, 2013-05-21, sungmin.woo@lge.com */
-#if 0
+
 	if (read_cfg->addr_type == MSM_CAMERA_I2C_BYTE_ADDR)
 		val = CCI_I2C_WRITE_DISABLE_P_CMD | (read_cfg->addr_type << 4) |
 			((read_cfg->addr & 0xFF) << 8);
@@ -361,16 +351,6 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		val = CCI_I2C_WRITE_DISABLE_P_CMD | (read_cfg->addr_type << 4) |
 			(((read_cfg->addr & 0xFF00) >> 8) << 8) |
 			((read_cfg->addr & 0xFF) << 16);
-#else
-	if (read_cfg->addr_type == MSM_CAMERA_I2C_BYTE_ADDR)
-		val = CCI_I2C_WRITE_DISABLE_P_CMD | (read_cfg->addr_type << 4) |	//kkh
-			((read_cfg->addr & 0xFF) << 8);
-	if (read_cfg->addr_type == MSM_CAMERA_I2C_WORD_ADDR)
-		val = CCI_I2C_WRITE_DISABLE_P_CMD | (read_cfg->addr_type << 4) |	//kkh
-			(((read_cfg->addr & 0xFF00) >> 8) << 8) |
-			((read_cfg->addr & 0xFF) << 16);
-#endif
-/*LGE_CHANGE E, i2c read bug fix confirmed by QCT, 2013-05-21, sungmin.woo@lge.com */
 	rc = msm_cci_write_i2c_queue(cci_dev, val, master, queue);
 	if (rc < 0) {
 		CDBG("%s failed line %d\n", __func__, __LINE__);
@@ -403,7 +383,10 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		__LINE__);
 	rc = wait_for_completion_interruptible_timeout(&cci_dev->
 		cci_master_info[master].reset_complete, CCI_TIMEOUT);
-	if (rc <= 0) {
+	if (rc == -ERESTARTSYS) {
+		pr_err("%s:%d failed: rc %d", __func__, __LINE__, rc);
+		goto ERROR;
+	} else if (rc <= 0) {
 		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
 			 __func__, __LINE__);
 		if (rc == 0)
@@ -420,7 +403,7 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		CCI_I2C_M0_READ_BUF_LEVEL_ADDR + master * 0x100);
 	exp_words = ((read_cfg->num_byte / 4) + 1);
 	if (read_words != exp_words) {
-		pr_err("%s:%d read_words = %d, exp words = %d -> normal log, no error !!\n", __func__,
+		pr_err("%s:%d read_words = %d, exp words = %d\n", __func__,
 			__LINE__, read_words, exp_words);
 		memset(read_cfg->data, 0, read_cfg->num_byte);
 		rc = -EINVAL;
@@ -588,8 +571,9 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 		__func__, __LINE__);
 	rc = wait_for_completion_interruptible_timeout(&cci_dev->
 		cci_master_info[master].reset_complete, CCI_TIMEOUT);
-
-	if (rc <= 0) {
+	if (rc == -ERESTARTSYS) {
+		pr_err("%s:%d failed: rc %d", __func__, __LINE__, rc);
+	} else if (rc <= 0) {
 		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
 			 __func__, __LINE__);
 		if (rc == 0)
@@ -760,57 +744,6 @@ static irqreturn_t msm_cci_irq(int irq_num, void *data)
 	msm_camera_io_w(0x1, cci_dev->base + CCI_IRQ_GLOBAL_CLEAR_CMD_ADDR);
 	msm_camera_io_w(0x0, cci_dev->base + CCI_IRQ_GLOBAL_CLEAR_CMD_ADDR);
 	CDBG("%s CCI_I2C_M0_STATUS_ADDR = 0x%x\n", __func__, irq);
-
-#if 0 // Quallcomm Org.
-	if (irq & CCI_IRQ_STATUS_0_RST_DONE_ACK_BMSK) {
-		if (cci_dev->cci_master_info[MASTER_0].reset_pending == TRUE) {
-			cci_dev->cci_master_info[MASTER_0].reset_pending =
-				FALSE;
-			complete(&cci_dev->cci_master_info[MASTER_0].
-				reset_complete);
-		}
-		if (cci_dev->cci_master_info[MASTER_1].reset_pending == TRUE) {
-			cci_dev->cci_master_info[MASTER_1].reset_pending =
-				FALSE;
-			complete(&cci_dev->cci_master_info[MASTER_1].
-				reset_complete);
-		}
-	} else if ((irq & CCI_IRQ_STATUS_0_I2C_M0_RD_DONE_BMSK) ||
-		(irq & CCI_IRQ_STATUS_0_I2C_M0_Q0_REPORT_BMSK) ||
-		(irq & CCI_IRQ_STATUS_0_I2C_M0_Q1_REPORT_BMSK)) {
-		cci_dev->cci_master_info[MASTER_0].status = 0;
-		complete(&cci_dev->cci_master_info[MASTER_0].reset_complete);
-	} else if ((irq & CCI_IRQ_STATUS_0_I2C_M1_RD_DONE_BMSK) ||
-		(irq & CCI_IRQ_STATUS_0_I2C_M1_Q0_REPORT_BMSK) ||
-		(irq & CCI_IRQ_STATUS_0_I2C_M1_Q1_REPORT_BMSK)) {
-		cci_dev->cci_master_info[MASTER_1].status = 0;
-		complete(&cci_dev->cci_master_info[MASTER_1].reset_complete);
-	} else if (irq & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_HALT_ACK_BMSK) {
-		cci_dev->cci_master_info[MASTER_0].reset_pending = TRUE;
-		msm_camera_io_w(CCI_M0_RESET_RMSK,
-			cci_dev->base + CCI_RESET_CMD_ADDR);
-	} else if (irq & CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_HALT_ACK_BMSK) {
-		cci_dev->cci_master_info[MASTER_1].reset_pending = TRUE;
-		msm_camera_io_w(CCI_M1_RESET_RMSK,
-			cci_dev->base + CCI_RESET_CMD_ADDR);
-	} else if (irq & CCI_IRQ_STATUS_0_I2C_M0_ERROR_BMSK) {
-		pr_err("%s:%d MASTER_0 error %x\n", __func__, __LINE__, irq);
-		cci_dev->cci_master_info[MASTER_0].status = -EINVAL;
-		msm_camera_io_w(CCI_M0_HALT_REQ_RMSK,
-			cci_dev->base + CCI_HALT_REQ_ADDR);
-	} else if (irq & CCI_IRQ_STATUS_0_I2C_M1_ERROR_BMSK) {
-		pr_err("%s:%d MASTER_1 error %x\n", __func__, __LINE__, irq);
-		cci_dev->cci_master_info[MASTER_1].status = -EINVAL;
-		msm_camera_io_w(CCI_M1_HALT_REQ_RMSK,
-			cci_dev->base + CCI_HALT_REQ_ADDR);
-	} else {
-		pr_err("%s unhandled irq 0x%x\n", __func__, irq);
-		cci_dev->cci_master_info[MASTER_0].status = 0;
-		complete(&cci_dev->cci_master_info[MASTER_0].reset_complete);
-		cci_dev->cci_master_info[MASTER_1].status = 0;
-		complete(&cci_dev->cci_master_info[MASTER_1].reset_complete);
-	}
-#else // Quallcomm patch for i2c timeout issue in dual recording, 2013-06-13, jungpyo.hong@lge.com
 	if (irq & CCI_IRQ_STATUS_0_RST_DONE_ACK_BMSK) {
 		if (cci_dev->cci_master_info[MASTER_0].reset_pending == TRUE) {
 			cci_dev->cci_master_info[MASTER_0].reset_pending =
@@ -859,7 +792,6 @@ static irqreturn_t msm_cci_irq(int irq_num, void *data)
 		msm_camera_io_w(CCI_M1_HALT_REQ_RMSK,
 			cci_dev->base + CCI_HALT_REQ_ADDR);
 	}
-#endif
 	return IRQ_HANDLED;
 }
 
@@ -885,10 +817,7 @@ static long msm_cci_subdev_ioctl(struct v4l2_subdev *sd,
 		rc = msm_cci_config(sd, arg);
 		break;
 	case MSM_SD_SHUTDOWN: {
-		struct msm_camera_cci_ctrl ctrl_cmd;
-		ctrl_cmd.cmd = MSM_CCI_RELEASE;
-		rc = msm_cci_config(sd, &ctrl_cmd);
-		break;
+		return rc;
 	}
 	default:
 		rc = -ENOIOCTLCMD;

@@ -25,6 +25,7 @@
 #define JPEG_REG_SIZE 0x308
 #define JPEG_DEV_CNT 3
 #define JPEG_DEC_ID 2
+#define UINT32_MAX (0xFFFFFFFFU)
 
 inline void msm_jpeg_q_init(char const *name, struct msm_jpeg_q *q_p)
 {
@@ -221,6 +222,7 @@ int msm_jpeg_evt_get(struct msm_jpeg_device *pgmn_dev,
 		return -EAGAIN;
 	}
 
+	memset(&ctrl_cmd, 0, sizeof(ctrl_cmd));
 	ctrl_cmd.type = buf_p->vbuf.type;
 	kfree(buf_p);
 
@@ -640,12 +642,6 @@ int __msm_jpeg_release(struct msm_jpeg_device *pgmn_dev)
 	msm_jpeg_platform_release(pgmn_dev->mem, pgmn_dev->base,
 		pgmn_dev->irq, pgmn_dev);
 
-	/* QMC patch from SR 1195923 */
-#ifdef CONFIG_MACH_LGE
-	pgmn_dev->mem = NULL;
-	pgmn_dev->base = NULL;
-#endif
-
 	JPEG_DBG("%s:%d]\n", __func__, __LINE__);
 	return 0;
 }
@@ -681,13 +677,19 @@ int msm_jpeg_ioctl_hw_cmds(struct msm_jpeg_device *pgmn_dev,
 	void * __user arg)
 {
 	int is_copy_to_user;
-	int len;
+	uint32_t len;
 	uint32_t m;
 	struct msm_jpeg_hw_cmds *hw_cmds_p;
 	struct msm_jpeg_hw_cmd *hw_cmd_p;
 
 	if (copy_from_user(&m, arg, sizeof(m))) {
 		JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
+		return -EFAULT;
+	}
+
+	if ((m == 0) || (m > ((UINT32_MAX - sizeof(struct msm_jpeg_hw_cmds)) /
+		sizeof(struct msm_jpeg_hw_cmd)))) {
+		JPEG_PR_ERR("%s:%d] m_cmds out of range\n", __func__, __LINE__);
 		return -EFAULT;
 	}
 
@@ -763,6 +765,7 @@ int msm_jpeg_start(struct msm_jpeg_device *pgmn_dev, void * __user arg)
 	wmb();
 	rc = msm_jpeg_ioctl_hw_cmds(pgmn_dev, arg);
 	wmb();
+	pgmn_dev->state = MSM_JPEG_EXECUTING;
 	JPEG_DBG("%s:%d]", __func__, __LINE__);
 	return rc;
 }
@@ -774,15 +777,21 @@ int msm_jpeg_ioctl_reset(struct msm_jpeg_device *pgmn_dev,
 	struct msm_jpeg_ctrl_cmd ctrl_cmd;
 
 	JPEG_DBG("%s:%d] Enter\n", __func__, __LINE__);
-	if (copy_from_user(&ctrl_cmd, arg, sizeof(ctrl_cmd))) {
-		JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
-		return -EFAULT;
-	}
 
+	if (pgmn_dev->state == MSM_JPEG_INIT) {
+		if (copy_from_user(&ctrl_cmd, arg, sizeof(ctrl_cmd))) {
+			JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
+			return -EFAULT;
+		}
 	pgmn_dev->op_mode = ctrl_cmd.type;
 
 	rc = msm_jpeg_core_reset(pgmn_dev, pgmn_dev->op_mode, pgmn_dev->base,
 		resource_size(pgmn_dev->mem));
+	} else {
+		JPEG_PR_ERR("%s:%d] JPEG not been initialized Wrong state\n",
+			__func__, __LINE__);
+		rc = -1;
+	}
 	return rc;
 }
 
@@ -810,6 +819,7 @@ long __msm_jpeg_ioctl(struct msm_jpeg_device *pgmn_dev,
 
 	case MSM_JPEG_IOCTL_STOP:
 		rc = msm_jpeg_ioctl_hw_cmds(pgmn_dev, (void __user *) arg);
+		pgmn_dev->state = MSM_JPEG_STOPPED;
 		break;
 
 	case MSM_JPEG_IOCTL_START:

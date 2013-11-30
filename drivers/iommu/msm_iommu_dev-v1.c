@@ -115,6 +115,7 @@ static int __get_bus_vote_client(struct platform_device *pdev,
 static void __put_bus_vote_client(struct msm_iommu_drvdata *drvdata)
 {
 	msm_bus_scale_unregister_client(drvdata->bus_client);
+	drvdata->bus_client = 0;
 }
 
 static int msm_iommu_parse_dt(struct platform_device *pdev,
@@ -263,13 +264,19 @@ static int __devinit msm_iommu_probe(struct platform_device *pdev)
 
 	drvdata->glb_base = drvdata->base;
 
-	drvdata->gdsc = devm_regulator_get(&pdev->dev, "vdd");
-	if (IS_ERR(drvdata->gdsc))
-		return PTR_ERR(drvdata->gdsc);
+	if (of_get_property(pdev->dev.of_node, "vdd-supply", NULL)) {
 
-	drvdata->alt_gdsc = devm_regulator_get(&pdev->dev, "qcom,alt-vdd");
-	if (IS_ERR(drvdata->alt_gdsc))
-		drvdata->alt_gdsc = NULL;
+		drvdata->gdsc = devm_regulator_get(&pdev->dev, "vdd");
+		if (IS_ERR(drvdata->gdsc))
+			return PTR_ERR(drvdata->gdsc);
+
+		drvdata->alt_gdsc = devm_regulator_get(&pdev->dev,
+							"qcom,alt-vdd");
+		if (IS_ERR(drvdata->alt_gdsc))
+			drvdata->alt_gdsc = NULL;
+	} else {
+		pr_debug("Warning: No regulator specified for IOMMU\n");
+	}
 
 	drvdata->pclk = devm_clk_get(&pdev->dev, "iface_clk");
 	if (IS_ERR(drvdata->pclk))
